@@ -1,0 +1,15 @@
+[package]
+name = "suit-offboard"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Server-side SUIT manifest building, signing, and encryption"
+
+[dependencies]
+suit-codec = { path = "../suit-codec" }
+suit-crypto = { path = "../suit-crypto" }
+coset = "0.3"
+zstd = "0.13"
+rand = "0.8"
+pem = "3"
+thiserror = "2"

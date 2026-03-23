@@ -1,0 +1,13 @@
+[package]
+name = "suit-codec"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "SUIT manifest types and CBOR codec (no_std)"
+
+[dependencies]
+ciborium = "0.2"
+coset = "0.3"
+
+[features]
+default = []

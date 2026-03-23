@@ -1,0 +1,14 @@
+[package]
+name = "suit-onboard"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Device-side SUIT manifest validation, decryption, and orchestration (no_std)"
+
+[dependencies]
+suit-codec = { path = "../suit-codec" }
+suit-crypto = { path = "../suit-crypto" }
+ruzstd = { version = "0.7", default-features = false }
+
+[features]
+default = []
