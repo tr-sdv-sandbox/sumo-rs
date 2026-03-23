@@ -9,5 +9,8 @@ description = "SUIT manifest types and CBOR codec (no_std)"
 ciborium = "0.2"
 coset = "0.3"
 
+[dev-dependencies]
+hex = "0.4"
+
 [features]
 default = []
