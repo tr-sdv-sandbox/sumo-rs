@@ -25,6 +25,7 @@ pub struct ImageManifestBuilder {
     payload_uri: Option<String>,
     fallback_uris: Vec<String>,
     encryption_info: Option<Vec<u8>>,
+    integrated_payloads: std::collections::BTreeMap<String, Vec<u8>>,
 }
 
 impl ImageManifestBuilder {
@@ -40,6 +41,7 @@ impl ImageManifestBuilder {
             payload_uri: None,
             fallback_uris: Vec::new(),
             encryption_info: None,
+            integrated_payloads: std::collections::BTreeMap::new(),
         }
     }
 
@@ -56,6 +58,10 @@ impl ImageManifestBuilder {
     pub fn payload_uri(mut self, uri: String) -> Self { self.payload_uri = Some(uri); self }
     pub fn fallback_uri(mut self, uri: String) -> Self { self.fallback_uris.push(uri); self }
     pub fn encryption_info(mut self, info: &[u8]) -> Self { self.encryption_info = Some(info.to_vec()); self }
+    pub fn integrated_payload(mut self, key: String, data: Vec<u8>) -> Self {
+        self.integrated_payloads.insert(key, data);
+        self
+    }
 
     /// Build and sign the SUIT envelope.
     pub fn build(self, signing_key: &CoseKey) -> Result<Vec<u8>, OffboardError> {
@@ -149,7 +155,7 @@ impl ImageManifestBuilder {
                 signatures: Vec::new(), // populated by encode_envelope
             },
             manifest,
-            integrated_payloads: std::collections::BTreeMap::new(),
+            integrated_payloads: self.integrated_payloads,
             manifest_bytes: Vec::new(), // populated by encode_envelope
         };
 
