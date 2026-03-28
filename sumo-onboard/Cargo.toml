@@ -1,0 +1,18 @@
+[package]
+name = "sumo-onboard"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Device-side SUIT manifest validation, decryption, and orchestration (no_std)"
+
+[dependencies]
+sumo-codec = { path = "../sumo-codec" }
+sumo-crypto = { path = "../sumo-crypto" }
+coset = { version = "0.3", default-features = false }
+ciborium = { version = "0.2", default-features = false }
+ruzstd = { version = "0.7", default-features = false }
+
+[features]
+default = ["std"]
+std = []
+linux-platform = ["std"]

@@ -1,0 +1,22 @@
+[package]
+name = "sumo-offboard"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Server-side SUIT manifest building, signing, and encryption"
+
+[dependencies]
+sumo-codec = { path = "../sumo-codec" }
+sumo-crypto = { path = "../sumo-crypto" }
+coset = "0.3"
+ciborium = "0.2"
+zstd = "0.13"
+rand = "0.8"
+pem = "3"
+thiserror = "2"
+p256 = { version = "0.13", features = ["ecdsa", "ecdh", "pem"] }
+ed25519-dalek = { version = "2", features = ["rand_core", "pem", "pkcs8"] }
+getrandom = "0.2"
+
+[dev-dependencies]
+sumo-onboard = { path = "../sumo-onboard" }

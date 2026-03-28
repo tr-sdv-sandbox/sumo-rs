@@ -1,0 +1,16 @@
+[package]
+name = "sumo-codec"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "SUIT manifest types and CBOR codec (no_std)"
+
+[dependencies]
+ciborium = { version = "0.2", default-features = false }
+coset = { version = "0.3", default-features = false }
+
+[dev-dependencies]
+hex = "0.4"
+
+[features]
+default = []

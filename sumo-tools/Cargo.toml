@@ -1,0 +1,18 @@
+[package]
+name = "sumo-tools"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "CLI tools for SUIT firmware update manifests"
+
+[[bin]]
+name = "sumo-tool"
+path = "src/main.rs"
+
+[dependencies]
+sumo-offboard = { path = "../sumo-offboard" }
+sumo-onboard = { path = "../sumo-onboard" }
+sumo-crypto = { path = "../sumo-crypto" }
+sumo-codec = { path = "../sumo-codec" }
+clap = { version = "4", features = ["derive"] }
+hex = "0.4"
