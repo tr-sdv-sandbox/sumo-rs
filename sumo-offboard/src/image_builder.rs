@@ -146,12 +146,17 @@ impl ImageManifestBuilder {
             });
         }
 
-        // Build validate sequence: condition-image-match
-        let validate = CommandSequence {
-            items: vec![CommandItem {
-                label: SUIT_CONDITION_IMAGE_MATCH,
-                value: CommandValue::ReportingPolicy(0),
-            }],
+        // Build validate sequence — only include condition-image-match if there's a digest
+        let validate = if self.payload_digest.is_some() {
+            Some(CommandSequence {
+                items: vec![CommandItem {
+                    label: SUIT_CONDITION_IMAGE_MATCH,
+                    value: CommandValue::ReportingPolicy(0),
+                }],
+            })
+        } else {
+            // Policy-only manifest (CRL, config) — no image to validate
+            None
         };
 
         // Build text metadata (if any text fields set)
@@ -189,7 +194,7 @@ impl ImageManifestBuilder {
                 dependencies: Vec::new(),
                 shared_sequence: CommandSequence { items: shared_items },
             },
-            validate: Some(validate),
+            validate,
             invoke: None,
             severable: SeverableMembers { text, ..SeverableMembers::default() },
         };

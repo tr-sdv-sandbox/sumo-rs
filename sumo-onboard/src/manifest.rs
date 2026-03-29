@@ -206,7 +206,12 @@ impl Manifest {
         self.envelope.manifest.invoke.is_some()
     }
 
-    /// True if this manifest carries a firmware payload (has digest + fetch/install).
+    /// True if the manifest has a validate sequence (hash verification).
+    pub fn has_validate(&self) -> bool {
+        self.envelope.manifest.validate.is_some()
+    }
+
+    /// True if this manifest carries a firmware payload (has digest).
     /// False for policy-only manifests (CRL, config updates).
     pub fn has_firmware(&self) -> bool {
         self.image_digest(0).is_some()
