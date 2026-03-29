@@ -87,6 +87,19 @@ impl Manifest {
             })
     }
 
+    /// Get the security version (custom parameter -257) for anti-rollback.
+    ///
+    /// This is separate from sequence_number: sequence_number is for build
+    /// ordering/replay protection; security_version is the anti-rollback
+    /// floor that advances only on explicit commit.
+    pub fn security_version(&self, component: usize) -> Option<u64> {
+        self.find_param(component, SUIT_PARAMETER_SECURITY_VERSION)
+            .and_then(|p| match &p.value {
+                ParameterValue::SecurityVersion(v) => Some(*v),
+                _ => None,
+            })
+    }
+
     pub fn uri(&self, component: usize) -> Option<&str> {
         // Search install → payload_fetch → shared sequence
         let sequences = [

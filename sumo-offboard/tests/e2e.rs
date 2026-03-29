@@ -942,3 +942,110 @@ fn eddsa_wrong_key_rejected() {
     let result = validator.validate_envelope(&envelope_bytes, &crypto, 0);
     assert_eq!(result.unwrap_err(), Sum2Error::AuthFailed);
 }
+
+// ============================================================
+// Text Fields & Security Version Tests
+// ============================================================
+
+#[test]
+fn text_fields_roundtrip() {
+    let crypto = RustCryptoBackend::new();
+    let signing_key = keygen::generate_signing_key(keygen::ES256).unwrap();
+
+    let firmware = b"text-test firmware";
+    let digest = crypto.sha256(firmware);
+
+    let envelope = ImageManifestBuilder::new()
+        .component_id(vec!["ecu-a".into(), "firmware".into()])
+        .sequence_number(10)
+        .payload_digest(&digest, firmware.len() as u64)
+        .text_vendor_name("Acme Corp")
+        .text_model_name("ECU-A Linux")
+        .text_model_info("Test build for A/B validation")
+        .text_version("1.2.3")
+        .text_description("Quarterly security update")
+        .build(&signing_key)
+        .unwrap();
+
+    let trust_anchor = signing_key.public_key_bytes();
+    let validator = Validator::new(&trust_anchor, None);
+    let manifest = validator.validate_envelope(&envelope, &crypto, 0).unwrap();
+
+    assert_eq!(manifest.text_vendor_name(0), Some("Acme Corp"));
+    assert_eq!(manifest.text_model_name(0), Some("ECU-A Linux"));
+    assert_eq!(manifest.text_model_info(0), Some("Test build for A/B validation"));
+    assert_eq!(manifest.text_version(0), Some("1.2.3"));
+    assert_eq!(manifest.text_description(), Some("Quarterly security update"));
+}
+
+#[test]
+fn security_version_roundtrip() {
+    let crypto = RustCryptoBackend::new();
+    let signing_key = keygen::generate_signing_key(keygen::ES256).unwrap();
+
+    let firmware = b"secver-test firmware";
+    let digest = crypto.sha256(firmware);
+
+    let envelope = ImageManifestBuilder::new()
+        .component_id(vec!["ecu-a".into()])
+        .sequence_number(50)
+        .security_version(3)
+        .payload_digest(&digest, firmware.len() as u64)
+        .text_version("2.5.1")
+        .build(&signing_key)
+        .unwrap();
+
+    let trust_anchor = signing_key.public_key_bytes();
+    let validator = Validator::new(&trust_anchor, None);
+    let manifest = validator.validate_envelope(&envelope, &crypto, 0).unwrap();
+
+    assert_eq!(manifest.sequence_number(), 50);
+    assert_eq!(manifest.security_version(0), Some(3));
+    assert_eq!(manifest.text_version(0), Some("2.5.1"));
+}
+
+#[test]
+fn security_version_absent_returns_none() {
+    let crypto = RustCryptoBackend::new();
+    let signing_key = keygen::generate_signing_key(keygen::ES256).unwrap();
+
+    let firmware = b"no-secver firmware";
+    let digest = crypto.sha256(firmware);
+
+    let envelope = ImageManifestBuilder::new()
+        .component_id(vec!["ecu-a".into()])
+        .sequence_number(10)
+        .payload_digest(&digest, firmware.len() as u64)
+        .build(&signing_key)
+        .unwrap();
+
+    let trust_anchor = signing_key.public_key_bytes();
+    let validator = Validator::new(&trust_anchor, None);
+    let manifest = validator.validate_envelope(&envelope, &crypto, 0).unwrap();
+
+    assert_eq!(manifest.security_version(0), None);
+}
+
+#[test]
+fn security_floor_only_manifest() {
+    // A manifest with security_version but no payload — raises the
+    // anti-rollback floor without installing firmware.
+    let crypto = RustCryptoBackend::new();
+    let signing_key = keygen::generate_signing_key(keygen::ES256).unwrap();
+
+    let envelope = ImageManifestBuilder::new()
+        .component_id(vec!["ecu-a".into()])
+        .sequence_number(999)
+        .security_version(5)
+        .build(&signing_key)
+        .unwrap();
+
+    let trust_anchor = signing_key.public_key_bytes();
+    let validator = Validator::new(&trust_anchor, None);
+    let manifest = validator.validate_envelope(&envelope, &crypto, 0).unwrap();
+
+    assert_eq!(manifest.sequence_number(), 999);
+    assert_eq!(manifest.security_version(0), Some(5));
+    assert_eq!(manifest.component_count(), 1);
+    assert!(manifest.image_digest(0).is_none());
+}

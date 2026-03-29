@@ -301,6 +301,10 @@ fn decode_parameter_value(label: i64, value: &Value) -> Result<ParameterValue, C
             let vm = decode_version_match(&bstr)?;
             Ok(ParameterValue::Version(vm))
         }
+        SUIT_PARAMETER_SECURITY_VERSION => {
+            let v = as_uint(value)?;
+            Ok(ParameterValue::SecurityVersion(v))
+        }
         _ => {
             // Unknown parameter — store raw bytes if bstr, or serialize
             match value {

@@ -33,6 +33,9 @@ pub const SUIT_PARAMETER_ENCRYPTION_INFO: i64 = 19;
 pub const SUIT_PARAMETER_VERSION: i64 = 26;
 pub const SUIT_PARAMETER_DEVICE_IDENTIFIER: i64 = 24;
 
+// Custom parameters (private use range, negative integers)
+pub const SUIT_PARAMETER_SECURITY_VERSION: i64 = -257;
+
 // SUIT directives
 pub const SUIT_DIRECTIVE_SET_COMPONENT_INDEX: i64 = 12;
 pub const SUIT_DIRECTIVE_SET_PARAMETERS: i64 = 19;

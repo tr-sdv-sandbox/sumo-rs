@@ -23,5 +23,6 @@ pub enum ParameterValue {
     DeviceId(Uuid),
     EncryptionInfo(Vec<u8>),
     Version(VersionMatch),
+    SecurityVersion(u64),
     Raw(Vec<u8>),
 }

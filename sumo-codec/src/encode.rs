@@ -221,6 +221,7 @@ fn encode_parameter_value(value: &ParameterValue) -> Result<Value, CodecError> {
             let cbor = encode_version_match(vm)?;
             Ok(Value::Bytes(cbor))
         }
+        ParameterValue::SecurityVersion(v) => Ok(Value::Integer(Integer::from(*v))),
         ParameterValue::Raw(raw) => Ok(Value::Bytes(raw.clone())),
     }
 }

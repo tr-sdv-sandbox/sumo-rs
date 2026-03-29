@@ -7,6 +7,7 @@ use sumo_codec::envelope::{SuitAuthentication, SuitEnvelope};
 use sumo_codec::labels::*;
 use sumo_codec::manifest::{SeverableMembers, SuitCommon, SuitManifest};
 use sumo_codec::parameters::{ParameterValue, SuitParameter};
+use sumo_codec::text::{SuitText, TextComponent};
 use sumo_codec::types::{DigestAlgorithm, DigestInfo, SemVer, Uuid};
 
 use crate::cose_key::CoseKey;
@@ -26,6 +27,12 @@ pub struct ImageManifestBuilder {
     fallback_uris: Vec<String>,
     encryption_info: Option<Vec<u8>>,
     integrated_payloads: std::collections::BTreeMap<String, Vec<u8>>,
+    security_version: Option<u64>,
+    text_vendor_name: Option<String>,
+    text_model_name: Option<String>,
+    text_model_info: Option<String>,
+    text_version: Option<String>,
+    text_description: Option<String>,
 }
 
 impl ImageManifestBuilder {
@@ -42,6 +49,12 @@ impl ImageManifestBuilder {
             fallback_uris: Vec::new(),
             encryption_info: None,
             integrated_payloads: std::collections::BTreeMap::new(),
+            security_version: None,
+            text_vendor_name: None,
+            text_model_name: None,
+            text_model_info: None,
+            text_version: None,
+            text_description: None,
         }
     }
 
@@ -62,6 +75,12 @@ impl ImageManifestBuilder {
         self.integrated_payloads.insert(key, data);
         self
     }
+    pub fn security_version(mut self, v: u64) -> Self { self.security_version = Some(v); self }
+    pub fn text_vendor_name(mut self, s: impl Into<String>) -> Self { self.text_vendor_name = Some(s.into()); self }
+    pub fn text_model_name(mut self, s: impl Into<String>) -> Self { self.text_model_name = Some(s.into()); self }
+    pub fn text_model_info(mut self, s: impl Into<String>) -> Self { self.text_model_info = Some(s.into()); self }
+    pub fn text_version(mut self, s: impl Into<String>) -> Self { self.text_version = Some(s.into()); self }
+    pub fn text_description(mut self, s: impl Into<String>) -> Self { self.text_description = Some(s.into()); self }
 
     /// Build and sign the SUIT envelope.
     pub fn build(self, signing_key: &CoseKey) -> Result<Vec<u8>, OffboardError> {
@@ -112,6 +131,12 @@ impl ImageManifestBuilder {
                 value: ParameterValue::EncryptionInfo(enc_info.clone()),
             });
         }
+        if let Some(secver) = self.security_version {
+            params.push(SuitParameter {
+                label: SUIT_PARAMETER_SECURITY_VERSION,
+                value: ParameterValue::SecurityVersion(secver),
+            });
+        }
 
         let mut shared_items = Vec::new();
         if !params.is_empty() {
@@ -129,6 +154,33 @@ impl ImageManifestBuilder {
             }],
         };
 
+        // Build text metadata (if any text fields set)
+        let text = {
+            let tc = TextComponent {
+                vendor_name: self.text_vendor_name,
+                model_name: self.text_model_name,
+                vendor_domain: None,
+                model_info: self.text_model_info,
+                description: None,
+                version: self.text_version,
+            };
+            let has_text = tc.vendor_name.is_some()
+                || tc.model_name.is_some()
+                || tc.model_info.is_some()
+                || tc.version.is_some()
+                || self.text_description.is_some();
+            if has_text {
+                let mut components = std::collections::BTreeMap::new();
+                components.insert(0, tc);
+                Some(SuitText {
+                    description: self.text_description,
+                    components,
+                })
+            } else {
+                None
+            }
+        };
+
         let manifest = SuitManifest {
             manifest_version: 1,
             sequence_number: self.sequence_number,
@@ -139,7 +191,7 @@ impl ImageManifestBuilder {
             },
             validate: Some(validate),
             invoke: None,
-            severable: SeverableMembers::default(),
+            severable: SeverableMembers { text, ..SeverableMembers::default() },
         };
 
         // Encode manifest to compute digest
