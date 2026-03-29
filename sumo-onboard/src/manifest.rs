@@ -189,6 +189,29 @@ impl Manifest {
             .and_then(|t| t.description.as_deref())
     }
 
+    // --- Command sequence presence ---
+
+    /// True if the manifest has a payload fetch sequence (firmware to download).
+    pub fn has_payload_fetch(&self) -> bool {
+        self.envelope.manifest.severable.payload_fetch.is_some()
+    }
+
+    /// True if the manifest has an install sequence (firmware to write).
+    pub fn has_install(&self) -> bool {
+        self.envelope.manifest.severable.install.is_some()
+    }
+
+    /// True if the manifest has an invoke sequence (boot/execute after install).
+    pub fn has_invoke(&self) -> bool {
+        self.envelope.manifest.invoke.is_some()
+    }
+
+    /// True if this manifest carries a firmware payload (has digest + fetch/install).
+    /// False for policy-only manifests (CRL, config updates).
+    pub fn has_firmware(&self) -> bool {
+        self.image_digest(0).is_some()
+    }
+
     /// Raw envelope reference (for decryptor/orchestrator access).
     pub fn envelope(&self) -> &SuitEnvelope {
         &self.envelope
