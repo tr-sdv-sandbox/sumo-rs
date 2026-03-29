@@ -146,8 +146,10 @@ impl ImageManifestBuilder {
             });
         }
 
-        // Build validate sequence — only include condition-image-match if there's a digest
-        let validate = if self.payload_digest.is_some() {
+        let is_firmware = self.payload_digest.is_some();
+
+        // Command sequences — only for firmware manifests, not policy-only
+        let validate = if is_firmware {
             Some(CommandSequence {
                 items: vec![CommandItem {
                     label: SUIT_CONDITION_IMAGE_MATCH,
@@ -155,7 +157,30 @@ impl ImageManifestBuilder {
                 }],
             })
         } else {
-            // Policy-only manifest (CRL, config) — no image to validate
+            None
+        };
+
+        // Install sequence: directive-copy (write to target storage)
+        let install = if is_firmware {
+            Some(CommandSequence {
+                items: vec![CommandItem {
+                    label: SUIT_DIRECTIVE_COPY,
+                    value: CommandValue::ReportingPolicy(0),
+                }],
+            })
+        } else {
+            None
+        };
+
+        // Invoke sequence: directive-invoke (boot new firmware)
+        let invoke = if is_firmware {
+            Some(CommandSequence {
+                items: vec![CommandItem {
+                    label: SUIT_DIRECTIVE_INVOKE,
+                    value: CommandValue::ReportingPolicy(0),
+                }],
+            })
+        } else {
             None
         };
 
@@ -195,8 +220,8 @@ impl ImageManifestBuilder {
                 shared_sequence: CommandSequence { items: shared_items },
             },
             validate,
-            invoke: None,
-            severable: SeverableMembers { text, ..SeverableMembers::default() },
+            invoke,
+            severable: SeverableMembers { text, install, ..SeverableMembers::default() },
         };
 
         // Encode manifest to compute digest
