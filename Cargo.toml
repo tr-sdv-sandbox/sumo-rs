@@ -1,5 +1,5 @@
 [workspace]
-members = ["sumo-codec", "sumo-crypto", "sumo-onboard", "sumo-offboard", "sumo-tools"]
+members = ["sumo-codec", "sumo-crypto", "sumo-onboard", "sumo-offboard", "sumo-processor", "sumo-tools"]
 resolver = "2"
 
 [workspace.package]

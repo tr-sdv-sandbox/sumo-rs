@@ -1,0 +1,12 @@
+[package]
+name = "sumo-processor"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "SUIT command sequence interpreter — executes manifest directives via PlatformOps"
+
+[dependencies]
+sumo-codec = { path = "../sumo-codec" }
+sumo-crypto = { path = "../sumo-crypto" }
+sumo-onboard = { path = "../sumo-onboard" }
+tracing = "0.1"
