@@ -149,6 +149,7 @@ impl CampaignBuilder {
         }
 
         // Build install sequence: process-dependency for each dep
+        // This installs all ECUs before any is invoked.
         let mut install_items = Vec::new();
         for idx in 0..self.deps.len() {
             install_items.push(CommandItem {
@@ -161,6 +162,32 @@ impl CampaignBuilder {
             });
         }
 
+        // Build validate sequence: verify all dependencies after install
+        let mut validate_items = Vec::new();
+        for idx in 0..self.deps.len() {
+            validate_items.push(CommandItem {
+                label: SUIT_DIRECTIVE_SET_COMPONENT_INDEX,
+                value: CommandValue::ComponentIndex(idx),
+            });
+            validate_items.push(CommandItem {
+                label: SUIT_CONDITION_DEPENDENCY_INTEGRITY,
+                value: CommandValue::ReportingPolicy(0),
+            });
+        }
+
+        // Build invoke sequence: boot all ECUs after validation
+        let mut invoke_items = Vec::new();
+        for idx in 0..self.deps.len() {
+            invoke_items.push(CommandItem {
+                label: SUIT_DIRECTIVE_SET_COMPONENT_INDEX,
+                value: CommandValue::ComponentIndex(idx),
+            });
+            invoke_items.push(CommandItem {
+                label: SUIT_DIRECTIVE_INVOKE,
+                value: CommandValue::ReportingPolicy(0),
+            });
+        }
+
         let manifest = SuitManifest {
             manifest_version: 1,
             sequence_number: self.sequence_number,
@@ -169,8 +196,8 @@ impl CampaignBuilder {
                 dependencies,
                 shared_sequence: CommandSequence { items: shared_items },
             },
-            validate: None,
-            invoke: None,
+            validate: Some(CommandSequence { items: validate_items }),
+            invoke: Some(CommandSequence { items: invoke_items }),
             severable: SeverableMembers {
                 dependency_resolution: Some(CommandSequence { items: dep_res_items }),
                 install: Some(CommandSequence { items: install_items }),
