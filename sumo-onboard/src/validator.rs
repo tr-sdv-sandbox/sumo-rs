@@ -95,10 +95,6 @@ impl Validator {
             _ => return Err(Sum2Error::Unsupported),
         };
         if actual_hash.as_slice() != expected_digest.bytes.as_slice() {
-            #[cfg(feature = "std")]
-            eprintln!("[validator] DIGEST MISMATCH: expected {:02x?}, got {:02x?}",
-                &expected_digest.bytes[..8.min(expected_digest.bytes.len())],
-                &actual_hash.as_slice()[..8]);
             return Err(Sum2Error::AuthFailed);
         }
 
@@ -106,11 +102,7 @@ impl Validator {
         let mut any_sig_valid = false;
         for sig_bytes in &envelope.authentication.signatures {
             let sign1 = coset::CoseSign1::from_slice(sig_bytes)
-                .map_err(|_| {
-                    #[cfg(feature = "std")]
-                    eprintln!("[validator] COSE_Sign1 CBOR decode failed");
-                    Sum2Error::AuthFailed
-                })?;
+                .map_err(|_| Sum2Error::AuthFailed)?;
 
             // The payload in COSE_Sign1 for SUIT is the digest CBOR (already verified above)
             // The protected header is serialized as part of the Sig_structure
@@ -130,12 +122,6 @@ impl Validator {
 
                 let verify_result = crypto
                     .verify_sign1(anchor, protected_bytes, payload, &sign1.signature);
-                #[cfg(feature = "std")]
-                if verify_result.is_err() {
-                    eprintln!("[validator] SIGNATURE VERIFY FAILED: protected_len={}, payload_len={}, sig_len={}, anchor_params={}",
-                        protected_bytes.len(), payload.len(), sign1.signature.len(),
-                        anchor.params.len());
-                }
                 if verify_result.is_ok()
                 {
                     // Check revocation for this key
