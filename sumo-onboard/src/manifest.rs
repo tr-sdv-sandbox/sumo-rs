@@ -9,7 +9,7 @@ use sumo_codec::types::{DigestInfo, Uuid, VersionMatch};
 /// A validated SUIT manifest with convenient accessor methods.
 #[derive(Debug)]
 pub struct Manifest {
-    pub(crate) envelope: SuitEnvelope,
+    pub envelope: SuitEnvelope,
 }
 
 impl Manifest {

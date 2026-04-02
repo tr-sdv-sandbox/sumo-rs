@@ -897,6 +897,7 @@ dependencies = [
 name = "sumo-tools"
 version = "0.1.0"
 dependencies = [
+ "ciborium",
  "clap",
  "hex",
  "sumo-codec",

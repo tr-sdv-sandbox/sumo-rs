@@ -42,14 +42,18 @@ enum Command {
     },
 
     /// Build an L2 image manifest.
+    ///
+    /// Two modes:
+    ///   1. With --firmware: reads file, optionally compresses+encrypts, computes digest
+    ///   2. Without --firmware: reference build using --payload-digest + --payload-size
     Build {
         /// Signing key file (COSE_Key CBOR)
         #[arg(short = 'k', long)]
         signing_key: PathBuf,
 
-        /// Firmware payload file
+        /// Firmware payload file (omit for reference builds with --payload-digest)
         #[arg(short, long)]
-        firmware: PathBuf,
+        firmware: Option<PathBuf>,
 
         /// Output envelope file
         #[arg(short, long)]
@@ -83,9 +87,38 @@ enum Command {
         #[arg(long)]
         compress: bool,
 
-        /// Write encrypted payload to this file (instead of embedding)
+        /// Write encrypted payload to this file (instead of embedding).
+        /// Also writes {path}.enc-info with the encryption_info CBOR.
         #[arg(long)]
         payload_output: Option<PathBuf>,
+
+        /// Security version (anti-rollback floor, separate from sequence number)
+        #[arg(long)]
+        security_version: Option<u64>,
+
+        /// Human-readable version string (e.g., "1.2.0")
+        #[arg(long)]
+        version: Option<String>,
+
+        /// Model name (e.g., "OS1-Linux")
+        #[arg(long)]
+        model_name: Option<String>,
+
+        /// Description / spare part number
+        #[arg(long)]
+        description: Option<String>,
+
+        /// SHA-256 digest of plaintext firmware (hex, for reference builds without --firmware)
+        #[arg(long)]
+        payload_digest: Option<String>,
+
+        /// Size of plaintext firmware in bytes (for reference builds without --firmware)
+        #[arg(long)]
+        payload_size: Option<u64>,
+
+        /// Path to encryption_info CBOR file (for reference builds, from a prior --payload-output)
+        #[arg(long)]
+        encryption_info: Option<PathBuf>,
     },
 
     /// Inspect a SUIT envelope.
@@ -93,6 +126,29 @@ enum Command {
         /// SUIT envelope file
         #[arg(short, long)]
         input: PathBuf,
+    },
+
+    /// Attach a payload to a reference manifest, creating an integrated envelope.
+    ///
+    /// Takes a small reference manifest and a separate payload file, and produces
+    /// a new envelope with the payload embedded under the "#firmware" key.
+    /// The manifest signature is preserved (it covers only the manifest, not payloads).
+    Attach {
+        /// Reference manifest file (SUIT envelope without integrated payload)
+        #[arg(short, long)]
+        manifest: PathBuf,
+
+        /// Payload file to embed
+        #[arg(short, long)]
+        payload: PathBuf,
+
+        /// Output envelope file (manifest + integrated payload)
+        #[arg(short, long)]
+        output: PathBuf,
+
+        /// Payload key in the envelope (default: "#firmware")
+        #[arg(long, default_value = "#firmware")]
+        key: String,
     },
 
     /// Build an L1 campaign manifest.
@@ -178,72 +234,108 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             encrypt,
             compress,
             payload_output,
+            security_version,
+            version,
+            model_name,
+            description,
+            payload_digest: payload_digest_hex,
+            payload_size,
+            encryption_info: encryption_info_path,
         } => {
             let key_bytes = fs::read(&signing_key)?;
             let key = CoseKey::from_cose_key_bytes(&key_bytes)?;
-            let fw_data = fs::read(&firmware)?;
-
-            let crypto = RustCryptoBackend::new();
             let comp_id: Vec<String> = component.split(',').map(|s| s.to_string()).collect();
 
-            // Optionally compress
-            let payload = if compress {
-                eprintln!("Compressing firmware ({} bytes)...", fw_data.len());
-                encryptor::compress_firmware(&fw_data, 3)?
-            } else {
-                fw_data.clone()
-            };
+            // Two modes: firmware file (full build) or digest+size (reference build)
+            let (digest, fw_size, final_payload, enc_info) = if let Some(ref fw_path) = firmware {
+                if payload_digest_hex.is_some() || payload_size.is_some() {
+                    return Err("cannot use --firmware with --payload-digest/--payload-size".into());
+                }
 
-            // Optionally encrypt
-            let (final_payload, enc_info) = if let Some(ref key_files) = encrypt {
-                let recipients: Vec<Recipient> = key_files
-                    .split(',')
-                    .map(|path| {
-                        let kb = fs::read(path.trim())
-                            .unwrap_or_else(|_| panic!("cannot read key file: {path}"));
-                        let dk = CoseKey::from_cose_key_bytes(&kb)
-                            .unwrap_or_else(|_| panic!("invalid key file: {path}"));
-                        Recipient {
-                            public_key: dk,
-                            kid: path.trim().as_bytes().to_vec(),
-                        }
-                    })
-                    .collect();
+                let fw_data = fs::read(fw_path)?;
+                let crypto = RustCryptoBackend::new();
 
-                // Auto-detect: EC2 keys → ECDH-ES+A128KW, symmetric → A128KW
-                let is_ecdh = recipients.first().map_or(false, |r| r.public_key.is_ec2());
-
-                let encrypted = if is_ecdh {
-                    // Generate ephemeral sender key for ECDH
-                    let sender_key = keygen::generate_device_key(keygen::ES256)?;
-                    // Recipients need public keys only for ECDH
-                    let pub_recipients: Vec<Recipient> = recipients
-                        .into_iter()
-                        .map(|r| Recipient {
-                            public_key: CoseKey::from_cose_key_bytes(&r.public_key.public_key_bytes()).unwrap(),
-                            kid: r.kid,
-                        })
-                        .collect();
-                    eprintln!("Using ECDH-ES+A128KW encryption");
-                    encryptor::encrypt_firmware_ecdh(&payload, &sender_key, &pub_recipients)?
+                // Optionally compress
+                let payload = if compress {
+                    eprintln!("Compressing firmware ({} bytes)...", fw_data.len());
+                    encryptor::compress_firmware(&fw_data, 3)?
                 } else {
-                    eprintln!("Using A128KW encryption");
-                    encryptor::encrypt_firmware(&payload, &recipients)?
+                    fw_data.clone()
                 };
 
-                eprintln!("Encrypted payload: {} bytes", encrypted.ciphertext.len());
-                (encrypted.ciphertext, Some(encrypted.encryption_info))
-            } else {
-                (payload, None)
-            };
+                // Optionally encrypt
+                let (final_payload, enc_info) = if let Some(ref key_files) = encrypt {
+                    let recipients: Vec<Recipient> = key_files
+                        .split(',')
+                        .map(|path| {
+                            let kb = fs::read(path.trim())
+                                .unwrap_or_else(|_| panic!("cannot read key file: {path}"));
+                            let dk = CoseKey::from_cose_key_bytes(&kb)
+                                .unwrap_or_else(|_| panic!("invalid key file: {path}"));
+                            Recipient {
+                                public_key: dk,
+                                kid: path.trim().as_bytes().to_vec(),
+                            }
+                        })
+                        .collect();
 
-            // Compute digest of original firmware (pre-compression, pre-encryption)
-            let digest = crypto.sha256(&fw_data);
+                    let is_ecdh = recipients.first().map_or(false, |r| r.public_key.is_ec2());
+
+                    let encrypted = if is_ecdh {
+                        let sender_key = keygen::generate_device_key(keygen::ES256)?;
+                        let pub_recipients: Vec<Recipient> = recipients
+                            .into_iter()
+                            .map(|r| Recipient {
+                                public_key: CoseKey::from_cose_key_bytes(&r.public_key.public_key_bytes()).unwrap(),
+                                kid: r.kid,
+                            })
+                            .collect();
+                        eprintln!("Using ECDH-ES+A128KW encryption");
+                        encryptor::encrypt_firmware_ecdh(&payload, &sender_key, &pub_recipients)?
+                    } else {
+                        eprintln!("Using A128KW encryption");
+                        encryptor::encrypt_firmware(&payload, &recipients)?
+                    };
+
+                    eprintln!("Encrypted payload: {} bytes", encrypted.ciphertext.len());
+                    (encrypted.ciphertext, Some(encrypted.encryption_info))
+                } else {
+                    (payload, None)
+                };
+
+                let digest = crypto.sha256(&fw_data);
+                (digest, fw_data.len() as u64, Some(final_payload), enc_info)
+            } else {
+                // Reference build mode — no firmware file
+                let digest_hex = payload_digest_hex
+                    .ok_or("--payload-digest required when --firmware is omitted")?;
+                let size = payload_size
+                    .ok_or("--payload-size required when --firmware is omitted")?;
+                if compress || encrypt.is_some() {
+                    return Err("--compress/--encrypt require --firmware".into());
+                }
+
+                let digest_bytes = hex::decode(&digest_hex)
+                    .map_err(|e| format!("invalid --payload-digest hex: {e}"))?;
+                if digest_bytes.len() != 32 {
+                    return Err("--payload-digest must be 64 hex chars (32 bytes SHA-256)".into());
+                }
+                let mut digest = [0u8; 32];
+                digest.copy_from_slice(&digest_bytes);
+
+                // Load encryption_info from file if provided
+                let enc_info = encryption_info_path
+                    .map(|p| fs::read(&p))
+                    .transpose()
+                    .map_err(|e| format!("read --encryption-info: {e}"))?;
+
+                (digest, size, None, enc_info)
+            };
 
             let mut builder = ImageManifestBuilder::new()
                 .component_id(comp_id)
                 .sequence_number(seq)
-                .payload_digest(&digest, fw_data.len() as u64);
+                .payload_digest(&digest, fw_size);
 
             if let Some(v) = vendor {
                 builder = builder.vendor_id(parse_uuid(&v)?);
@@ -254,8 +346,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if let Some(u) = uri {
                 builder = builder.payload_uri(u);
             }
-            if let Some(ei) = enc_info {
-                builder = builder.encryption_info(&ei);
+            if let Some(ref ei) = enc_info {
+                builder = builder.encryption_info(ei);
+            }
+            if let Some(sv) = security_version {
+                builder = builder.security_version(sv);
+            }
+            if let Some(ref v) = version {
+                builder = builder.text_version(v);
+            }
+            if let Some(ref mn) = model_name {
+                builder = builder.text_model_name(mn);
+            }
+            if let Some(ref d) = description {
+                builder = builder.text_description(d);
+            }
+
+            builder = builder.payload_uri("#firmware".to_string());
+
+            if let Some(ref fp) = final_payload {
+                if payload_output.is_none() {
+                    // No --payload-output: embed payload in manifest (integrated envelope)
+                    builder = builder
+                        .integrated_payload("#firmware".to_string(), fp.clone());
+                }
             }
 
             let envelope = builder.build(&key)?;
@@ -263,8 +377,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             eprintln!("Wrote manifest to {} ({} bytes)", output.display(), envelope.len());
 
             if let Some(po) = payload_output {
-                fs::write(&po, &final_payload)?;
-                eprintln!("Wrote payload to {} ({} bytes)", po.display(), final_payload.len());
+                if let Some(ref fp) = final_payload {
+                    fs::write(&po, fp)?;
+                    eprintln!("Wrote payload to {} ({} bytes)", po.display(), fp.len());
+
+                    // Also write encryption_info for reuse by reference builds
+                    if let Some(ref ei) = enc_info {
+                        let ei_path = PathBuf::from(format!("{}.enc-info", po.display()));
+                        fs::write(&ei_path, ei)?;
+                        eprintln!("Wrote encryption info to {} ({} bytes)", ei_path.display(), ei.len());
+                    }
+                }
             }
         }
 
@@ -310,6 +433,41 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     std::process::exit(1);
                 }
             }
+        }
+
+        Command::Attach {
+            manifest,
+            payload,
+            output,
+            key,
+        } => {
+            let manifest_data = fs::read(&manifest)?;
+            let payload_data = fs::read(&payload)?;
+            eprintln!("Attaching payload ({} bytes) as {:?}", payload_data.len(), key);
+
+            // Work at raw CBOR level to preserve the original signature.
+            // The envelope is a CBOR map — we just append a new text-keyed entry.
+            let value: ciborium::Value = ciborium::de::from_reader(manifest_data.as_slice())
+                .map_err(|e| format!("failed to decode CBOR: {e}"))?;
+
+            let entries = match value {
+                ciborium::Value::Map(entries) => entries,
+                _ => return Err("envelope is not a CBOR map".into()),
+            };
+
+            let mut new_entries = entries;
+            new_entries.push((
+                ciborium::Value::Text(key),
+                ciborium::Value::Bytes(payload_data),
+            ));
+
+            let new_map = ciborium::Value::Map(new_entries);
+            let mut buf = Vec::new();
+            ciborium::ser::into_writer(&new_map, &mut buf)
+                .map_err(|e| format!("failed to encode CBOR: {e}"))?;
+
+            fs::write(&output, &buf)?;
+            eprintln!("Wrote integrated envelope to {} ({} bytes)", output.display(), buf.len());
         }
 
         Command::Campaign {
