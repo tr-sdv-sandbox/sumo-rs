@@ -1,6 +1,9 @@
 //! sumo-tool: CLI for SUIT firmware update manifest operations.
 
+mod manifest;
+
 use std::fs;
+use std::io::Read as _;
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
@@ -46,10 +49,17 @@ enum Command {
     /// Two modes:
     ///   1. With --firmware: reads file, optionally compresses+encrypts, computes digest
     ///   2. Without --firmware: reference build using --payload-digest + --payload-size
+    ///
+    /// Alternatively, use --manifest to provide all parameters via a YAML file.
     Build {
+        /// YAML manifest descriptor file (use "-" for stdin).
+        /// When provided, other Build flags are ignored.
+        #[arg(short, long)]
+        manifest: Option<String>,
+
         /// Signing key file (COSE_Key CBOR)
         #[arg(short = 'k', long)]
-        signing_key: PathBuf,
+        signing_key: Option<PathBuf>,
 
         /// Firmware payload file (omit for reference builds with --payload-digest)
         #[arg(short, long)]
@@ -57,11 +67,11 @@ enum Command {
 
         /// Output envelope file
         #[arg(short, long)]
-        output: PathBuf,
+        output: Option<PathBuf>,
 
         /// Component ID segments (e.g., "ecu-a,firmware")
         #[arg(short, long)]
-        component: String,
+        component: Option<String>,
 
         /// Sequence number
         #[arg(short, long, default_value = "1")]
@@ -223,6 +233,35 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         Command::Build {
+            manifest: Some(ref manifest_path),
+            ..
+        } => {
+            // YAML-driven build path
+            let yaml_str = if manifest_path == "-" {
+                let mut buf = String::new();
+                std::io::stdin().read_to_string(&mut buf)?;
+                buf
+            } else {
+                fs::read_to_string(manifest_path)?
+            };
+            let desc: manifest::ManifestDescriptor = serde_yaml::from_str(&yaml_str)
+                .map_err(|e| format!("failed to parse manifest YAML: {e}"))?;
+
+            // Stdin conflict: can't read both YAML and payload from stdin
+            if manifest_path == "-" {
+                if let Some(ref p) = desc.payload {
+                    if p.file.as_deref() == Some("-") {
+                        return Err("cannot read both manifest and payload from stdin; \
+                            write the manifest to a file or use a named pipe".into());
+                    }
+                }
+            }
+
+            build_from_manifest(desc)?;
+        }
+
+        Command::Build {
+            manifest: None,
             signing_key,
             firmware,
             output,
@@ -242,6 +281,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             payload_size,
             encryption_info: encryption_info_path,
         } => {
+            // CLI-flags build path
+            let signing_key = signing_key
+                .ok_or("--signing-key is required (or use --manifest)")?;
+            let output = output
+                .ok_or("--output is required (or use --manifest)")?;
+            let component = component
+                .ok_or("--component is required (or use --manifest)")?;
+
             let key_bytes = fs::read(&signing_key)?;
             let key = CoseKey::from_cose_key_bytes(&key_bytes)?;
             let comp_id: Vec<String> = component.split(',').map(|s| s.to_string()).collect();
@@ -253,58 +300,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
 
                 let fw_data = fs::read(fw_path)?;
-                let crypto = RustCryptoBackend::new();
+                let encrypt_paths: Vec<PathBuf> = encrypt
+                    .as_deref()
+                    .map(|s| s.split(',').map(|p| PathBuf::from(p.trim())).collect())
+                    .unwrap_or_default();
 
-                // Optionally compress
-                let payload = if compress {
-                    eprintln!("Compressing firmware ({} bytes)...", fw_data.len());
-                    encryptor::compress_firmware(&fw_data, 3)?
-                } else {
-                    fw_data.clone()
-                };
-
-                // Optionally encrypt
-                let (final_payload, enc_info) = if let Some(ref key_files) = encrypt {
-                    let recipients: Vec<Recipient> = key_files
-                        .split(',')
-                        .map(|path| {
-                            let kb = fs::read(path.trim())
-                                .unwrap_or_else(|_| panic!("cannot read key file: {path}"));
-                            let dk = CoseKey::from_cose_key_bytes(&kb)
-                                .unwrap_or_else(|_| panic!("invalid key file: {path}"));
-                            Recipient {
-                                public_key: dk,
-                                kid: path.trim().as_bytes().to_vec(),
-                            }
-                        })
-                        .collect();
-
-                    let is_ecdh = recipients.first().map_or(false, |r| r.public_key.is_ec2());
-
-                    let encrypted = if is_ecdh {
-                        let sender_key = keygen::generate_device_key(keygen::ES256)?;
-                        let pub_recipients: Vec<Recipient> = recipients
-                            .into_iter()
-                            .map(|r| Recipient {
-                                public_key: CoseKey::from_cose_key_bytes(&r.public_key.public_key_bytes()).unwrap(),
-                                kid: r.kid,
-                            })
-                            .collect();
-                        eprintln!("Using ECDH-ES+A128KW encryption");
-                        encryptor::encrypt_firmware_ecdh(&payload, &sender_key, &pub_recipients)?
-                    } else {
-                        eprintln!("Using A128KW encryption");
-                        encryptor::encrypt_firmware(&payload, &recipients)?
-                    };
-
-                    eprintln!("Encrypted payload: {} bytes", encrypted.ciphertext.len());
-                    (encrypted.ciphertext, Some(encrypted.encryption_info))
-                } else {
-                    (payload, None)
-                };
-
-                let digest = crypto.sha256(&fw_data);
-                (digest, fw_data.len() as u64, Some(final_payload), enc_info)
+                let (digest, fw_size, final_payload, enc_info) =
+                    process_payload(&fw_data, compress, &encrypt_paths)?;
+                (digest, fw_size, Some(final_payload), enc_info)
             } else {
                 // Reference build mode — no firmware file
                 let digest_hex = payload_digest_hex
@@ -315,13 +318,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     return Err("--compress/--encrypt require --firmware".into());
                 }
 
-                let digest_bytes = hex::decode(&digest_hex)
-                    .map_err(|e| format!("invalid --payload-digest hex: {e}"))?;
-                if digest_bytes.len() != 32 {
-                    return Err("--payload-digest must be 64 hex chars (32 bytes SHA-256)".into());
-                }
-                let mut digest = [0u8; 32];
-                digest.copy_from_slice(&digest_bytes);
+                let digest = parse_digest_hex(&digest_hex)?;
 
                 // Load encryption_info from file if provided
                 let enc_info = encryption_info_path
@@ -366,7 +363,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             if let Some(ref fp) = final_payload {
                 if payload_output.is_none() {
-                    // No --payload-output: embed payload in manifest (integrated envelope)
                     builder = builder
                         .integrated_payload("#firmware".to_string(), fp.clone());
                 }
@@ -381,7 +377,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     fs::write(&po, fp)?;
                     eprintln!("Wrote payload to {} ({} bytes)", po.display(), fp.len());
 
-                    // Also write encryption_info for reuse by reference builds
                     if let Some(ref ei) = enc_info {
                         let ei_path = PathBuf::from(format!("{}.enc-info", po.display()));
                         fs::write(&ei_path, ei)?;
@@ -516,4 +511,243 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
+}
+
+// =============================================================================
+// Shared helpers
+// =============================================================================
+
+/// Parse a hex SHA-256 digest string into a 32-byte array.
+fn parse_digest_hex(hex_str: &str) -> Result<[u8; 32], Box<dyn std::error::Error>> {
+    let bytes = hex::decode(hex_str)
+        .map_err(|e| format!("invalid digest hex: {e}"))?;
+    if bytes.len() != 32 {
+        return Err("digest must be 64 hex chars (32 bytes SHA-256)".into());
+    }
+    let mut digest = [0u8; 32];
+    digest.copy_from_slice(&bytes);
+    Ok(digest)
+}
+
+/// Compress, encrypt, and compute digest for a firmware payload.
+///
+/// Returns `(sha256_digest, plaintext_size, processed_payload, encryption_info)`.
+fn process_payload(
+    fw_data: &[u8],
+    compress: bool,
+    encrypt_key_paths: &[PathBuf],
+) -> Result<([u8; 32], u64, Vec<u8>, Option<Vec<u8>>), Box<dyn std::error::Error>> {
+    let crypto = RustCryptoBackend::new();
+
+    // Optionally compress
+    let payload = if compress {
+        eprintln!("Compressing payload ({} bytes)...", fw_data.len());
+        encryptor::compress_firmware(fw_data, 3)?
+    } else {
+        fw_data.to_vec()
+    };
+
+    // Optionally encrypt
+    let (final_payload, enc_info) = if !encrypt_key_paths.is_empty() {
+        let recipients: Vec<Recipient> = encrypt_key_paths
+            .iter()
+            .map(|path| {
+                let kb = fs::read(path)
+                    .unwrap_or_else(|_| panic!("cannot read key file: {}", path.display()));
+                let dk = CoseKey::from_cose_key_bytes(&kb)
+                    .unwrap_or_else(|_| panic!("invalid key file: {}", path.display()));
+                Recipient {
+                    public_key: dk,
+                    kid: path.to_string_lossy().as_bytes().to_vec(),
+                }
+            })
+            .collect();
+
+        let is_ecdh = recipients.first().map_or(false, |r| r.public_key.is_ec2());
+
+        let encrypted = if is_ecdh {
+            let sender_key = keygen::generate_device_key(keygen::ES256)?;
+            let pub_recipients: Vec<Recipient> = recipients
+                .into_iter()
+                .map(|r| Recipient {
+                    public_key: CoseKey::from_cose_key_bytes(&r.public_key.public_key_bytes()).unwrap(),
+                    kid: r.kid,
+                })
+                .collect();
+            eprintln!("Using ECDH-ES+A128KW encryption");
+            encryptor::encrypt_firmware_ecdh(&payload, &sender_key, &pub_recipients)?
+        } else {
+            eprintln!("Using A128KW encryption");
+            encryptor::encrypt_firmware(&payload, &recipients)?
+        };
+
+        eprintln!("Encrypted payload: {} bytes", encrypted.ciphertext.len());
+        (encrypted.ciphertext, Some(encrypted.encryption_info))
+    } else {
+        (payload, None)
+    };
+
+    let digest = crypto.sha256(fw_data);
+    Ok((digest, fw_data.len() as u64, final_payload, enc_info))
+}
+
+/// Build a SUIT manifest from a YAML descriptor.
+fn build_from_manifest(desc: manifest::ManifestDescriptor) -> Result<(), Box<dyn std::error::Error>> {
+    let key_bytes = fs::read(&desc.signing_key)?;
+    let key = CoseKey::from_cose_key_bytes(&key_bytes)?;
+    let comp_id = desc.component_id.to_vec();
+
+    // Determine payload mode
+    let (digest, fw_size, final_payload, enc_info) = match desc.payload {
+        None => {
+            // CRL / policy-only manifest — no payload
+            let mut builder = ImageManifestBuilder::new()
+                .component_id(comp_id)
+                .sequence_number(desc.sequence_number);
+
+            if let Some(sv) = desc.security_version {
+                builder = builder.security_version(sv);
+            }
+            builder = apply_metadata(builder, desc.metadata.as_ref());
+
+            let envelope = builder.build(&key)?;
+            fs::write(&desc.output.manifest, &envelope)?;
+            eprintln!(
+                "Wrote manifest to {} ({} bytes)",
+                desc.output.manifest.display(),
+                envelope.len()
+            );
+            return Ok(());
+        }
+        Some(ref payload) => {
+            if let Some(ref file_path) = payload.file {
+                // Full build mode
+                let fw_data = if file_path == "-" {
+                    let mut buf = Vec::new();
+                    std::io::stdin().read_to_end(&mut buf)?;
+                    eprintln!("Read {} bytes from stdin", buf.len());
+                    buf
+                } else {
+                    fs::read(file_path)?
+                };
+
+                let encrypt_paths: Vec<PathBuf> = payload
+                    .encrypt
+                    .as_ref()
+                    .map(|e| e.device_keys.clone())
+                    .unwrap_or_default();
+
+                let (digest, fw_size, processed, enc_info) =
+                    process_payload(&fw_data, payload.compress, &encrypt_paths)?;
+                (digest, fw_size, Some(processed), enc_info)
+            } else if let (Some(ref digest_hex), Some(size)) = (&payload.digest, payload.size) {
+                // Reference build mode
+                let digest = parse_digest_hex(digest_hex)?;
+                let enc_info = payload
+                    .encryption_info
+                    .as_ref()
+                    .map(|p| fs::read(p))
+                    .transpose()
+                    .map_err(|e| format!("read encryption_info: {e}"))?;
+                (digest, size, None, enc_info)
+            } else {
+                return Err("payload section requires either 'file' or 'digest' + 'size'".into());
+            }
+        }
+    };
+
+    // Build the manifest
+    let mut builder = ImageManifestBuilder::new()
+        .component_id(comp_id)
+        .sequence_number(desc.sequence_number)
+        .payload_digest(&digest, fw_size);
+
+    if let Some(sv) = desc.security_version {
+        builder = builder.security_version(sv);
+    }
+
+    builder = apply_metadata(builder, desc.metadata.as_ref());
+
+    if let Some(ref ei) = enc_info {
+        builder = builder.encryption_info(ei);
+    }
+
+    // Payload URI and integration
+    let payload_desc = desc.payload.as_ref().unwrap();
+    let uri = payload_desc
+        .uri
+        .clone()
+        .unwrap_or_else(|| "#firmware".to_string());
+    builder = builder.payload_uri(uri.clone());
+
+    if let Some(ref fp) = final_payload {
+        if desc.output.payload.is_none() {
+            // Integrated envelope
+            builder = builder.integrated_payload(uri.clone(), fp.clone());
+        }
+    }
+
+    let envelope = builder.build(&key)?;
+    fs::write(&desc.output.manifest, &envelope)?;
+    eprintln!(
+        "Wrote manifest to {} ({} bytes)",
+        desc.output.manifest.display(),
+        envelope.len()
+    );
+
+    // Write separate payload + enc-info if requested
+    if let Some(ref po) = desc.output.payload {
+        if let Some(ref fp) = final_payload {
+            fs::write(po, fp)?;
+            eprintln!("Wrote payload to {} ({} bytes)", po.display(), fp.len());
+
+            if let Some(ref ei) = enc_info {
+                let ei_path = PathBuf::from(format!("{}.enc-info", po.display()));
+                fs::write(&ei_path, ei)?;
+                eprintln!(
+                    "Wrote encryption info to {} ({} bytes)",
+                    ei_path.display(),
+                    ei.len()
+                );
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Apply metadata fields from a YAML descriptor to an ImageManifestBuilder.
+fn apply_metadata(
+    mut builder: ImageManifestBuilder,
+    metadata: Option<&manifest::MetadataDescriptor>,
+) -> ImageManifestBuilder {
+    let Some(meta) = metadata else {
+        return builder;
+    };
+    if let Some(ref v) = meta.vendor_id {
+        if let Ok(uuid) = parse_uuid(v) {
+            builder = builder.vendor_id(uuid);
+        }
+    }
+    if let Some(ref c) = meta.class_id {
+        if let Ok(uuid) = parse_uuid(c) {
+            builder = builder.class_id(uuid);
+        }
+    }
+    if let Some(ref v) = meta.version {
+        builder = builder.text_version(v);
+    }
+    if let Some(ref mn) = meta.model_name {
+        builder = builder.text_model_name(mn);
+    }
+    if let Some(ref d) = meta.description {
+        builder = builder.text_description(d);
+    }
+    if let Some(ref vn) = meta.vendor_name {
+        builder = builder.text_vendor_name(vn);
+    }
+    if let Some(ref mi) = meta.model_info {
+        builder = builder.text_model_info(mi);
+    }
+    builder
 }

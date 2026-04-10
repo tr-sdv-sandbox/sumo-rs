@@ -17,3 +17,5 @@ sumo-codec = { path = "../sumo-codec" }
 ciborium = "0.2"
 clap = { version = "4", features = ["derive"] }
 hex = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_yaml = "0.9"
