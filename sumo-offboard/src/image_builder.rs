@@ -256,6 +256,219 @@ impl Default for ImageManifestBuilder {
     }
 }
 
+// =============================================================================
+// Multi-component manifest builder
+// =============================================================================
+
+/// A single component in a multi-component manifest.
+pub struct ComponentSpec {
+    pub id: Vec<String>,
+    pub digest: Vec<u8>,
+    pub size: u64,
+    pub uri: String,
+    pub encryption_info: Option<Vec<u8>>,
+}
+
+/// Builder for multi-component SUIT manifests (e.g., kernel + rootfs).
+///
+/// Each component gets its own entry in the manifest with independent
+/// digest, URI, and encryption info. The shared sequence uses
+/// `SET_COMPONENT_INDEX` to apply parameters per component.
+pub struct MultiComponentBuilder {
+    components: Vec<ComponentSpec>,
+    sequence_number: u64,
+    security_version: Option<u64>,
+    integrated_payloads: std::collections::BTreeMap<String, Vec<u8>>,
+    text_version: Option<String>,
+    text_model_name: Option<String>,
+    text_description: Option<String>,
+}
+
+impl MultiComponentBuilder {
+    pub fn new() -> Self {
+        Self {
+            components: Vec::new(),
+            sequence_number: 0,
+            security_version: None,
+            integrated_payloads: std::collections::BTreeMap::new(),
+            text_version: None,
+            text_model_name: None,
+            text_description: None,
+        }
+    }
+
+    pub fn sequence_number(mut self, seq: u64) -> Self { self.sequence_number = seq; self }
+    pub fn security_version(mut self, v: u64) -> Self { self.security_version = Some(v); self }
+    pub fn text_version(mut self, s: impl Into<String>) -> Self { self.text_version = Some(s.into()); self }
+    pub fn text_model_name(mut self, s: impl Into<String>) -> Self { self.text_model_name = Some(s.into()); self }
+    pub fn text_description(mut self, s: impl Into<String>) -> Self { self.text_description = Some(s.into()); self }
+
+    /// Add a component to the manifest.
+    pub fn add_component(mut self, spec: ComponentSpec) -> Self {
+        self.components.push(spec);
+        self
+    }
+
+    /// Add an integrated payload (embedded in the envelope).
+    pub fn integrated_payload(mut self, key: String, data: Vec<u8>) -> Self {
+        self.integrated_payloads.insert(key, data);
+        self
+    }
+
+    /// Build and sign the multi-component SUIT envelope.
+    pub fn build(self, signing_key: &CoseKey) -> Result<Vec<u8>, OffboardError> {
+        let crypto = sumo_crypto::RustCryptoBackend::new();
+
+        if self.components.is_empty() {
+            return Err(OffboardError::Other("no components added".into()));
+        }
+
+        // Build component identifiers
+        let components: Vec<ComponentIdentifier> = self.components.iter().map(|c| {
+            ComponentIdentifier {
+                segments: c.id.iter().map(|s| s.as_bytes().to_vec()).collect(),
+            }
+        }).collect();
+
+        // Build shared command sequence with per-component parameters
+        let mut shared_items = Vec::new();
+
+        for (idx, comp) in self.components.iter().enumerate() {
+            // SET_COMPONENT_INDEX
+            if self.components.len() > 1 {
+                shared_items.push(CommandItem {
+                    label: SUIT_DIRECTIVE_SET_COMPONENT_INDEX,
+                    value: CommandValue::ComponentIndex(idx),
+                });
+            }
+
+            // OVERRIDE_PARAMETERS for this component
+            let mut params = Vec::new();
+
+            params.push(SuitParameter {
+                label: SUIT_PARAMETER_IMAGE_DIGEST,
+                value: ParameterValue::ImageDigest(DigestInfo {
+                    algorithm: DigestAlgorithm::Sha256,
+                    bytes: comp.digest.clone(),
+                }),
+            });
+            params.push(SuitParameter {
+                label: SUIT_PARAMETER_IMAGE_SIZE,
+                value: ParameterValue::ImageSize(comp.size),
+            });
+            params.push(SuitParameter {
+                label: SUIT_PARAMETER_URI,
+                value: ParameterValue::Uri(comp.uri.clone()),
+            });
+            if let Some(ref enc_info) = comp.encryption_info {
+                params.push(SuitParameter {
+                    label: SUIT_PARAMETER_ENCRYPTION_INFO,
+                    value: ParameterValue::EncryptionInfo(enc_info.clone()),
+                });
+            }
+
+            // Security version on first component only
+            if idx == 0 {
+                if let Some(secver) = self.security_version {
+                    params.push(SuitParameter {
+                        label: SUIT_PARAMETER_SECURITY_VERSION,
+                        value: ParameterValue::SecurityVersion(secver),
+                    });
+                }
+            }
+
+            shared_items.push(CommandItem {
+                label: SUIT_DIRECTIVE_OVERRIDE_PARAMETERS,
+                value: CommandValue::Parameters(params),
+            });
+        }
+
+        // Validate + install + invoke for all components
+        let validate = Some(CommandSequence {
+            items: vec![CommandItem {
+                label: SUIT_CONDITION_IMAGE_MATCH,
+                value: CommandValue::ReportingPolicy(0),
+            }],
+        });
+        let install = Some(CommandSequence {
+            items: vec![CommandItem {
+                label: SUIT_DIRECTIVE_COPY,
+                value: CommandValue::ReportingPolicy(0),
+            }],
+        });
+        let invoke = Some(CommandSequence {
+            items: vec![CommandItem {
+                label: SUIT_DIRECTIVE_INVOKE,
+                value: CommandValue::ReportingPolicy(0),
+            }],
+        });
+
+        // Text metadata
+        let text = {
+            let tc = TextComponent {
+                vendor_name: None,
+                model_name: self.text_model_name,
+                vendor_domain: None,
+                model_info: None,
+                description: None,
+                version: self.text_version,
+            };
+            let has_text = tc.model_name.is_some() || tc.version.is_some() || self.text_description.is_some();
+            if has_text {
+                let mut text_components = std::collections::BTreeMap::new();
+                text_components.insert(0, tc);
+                Some(SuitText {
+                    description: self.text_description,
+                    components: text_components,
+                })
+            } else {
+                None
+            }
+        };
+
+        let manifest = SuitManifest {
+            manifest_version: 1,
+            sequence_number: self.sequence_number,
+            common: SuitCommon {
+                components,
+                dependencies: Vec::new(),
+                shared_sequence: CommandSequence { items: shared_items },
+            },
+            validate,
+            invoke,
+            severable: SeverableMembers { text, install, ..SeverableMembers::default() },
+        };
+
+        let manifest_bytes = sumo_codec::encode::encode_manifest(&manifest)?;
+        let digest_hash = crypto.sha256(&manifest_bytes);
+
+        let envelope = SuitEnvelope {
+            authentication: SuitAuthentication {
+                digest: DigestInfo {
+                    algorithm: DigestAlgorithm::Sha256,
+                    bytes: digest_hash.to_vec(),
+                },
+                signatures: Vec::new(),
+            },
+            manifest,
+            integrated_payloads: self.integrated_payloads,
+            manifest_bytes: Vec::new(),
+        };
+
+        let signed_bytes = encode_envelope(&envelope, |manifest_bytes| {
+            sign_manifest(&crypto, signing_key, manifest_bytes)
+        })?;
+
+        Ok(signed_bytes)
+    }
+}
+
+impl Default for MultiComponentBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Sign manifest bytes, producing a COSE_Sign1 structure.
 pub(crate) fn sign_manifest(
     crypto: &dyn CryptoBackend,
