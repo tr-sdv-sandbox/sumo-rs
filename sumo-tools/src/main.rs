@@ -138,27 +138,30 @@ enum Command {
         input: PathBuf,
     },
 
-    /// Attach a payload to a reference manifest, creating an integrated envelope.
+    /// Attach payload(s) to a reference manifest, creating an integrated envelope.
     ///
-    /// Takes a small reference manifest and a separate payload file, and produces
-    /// a new envelope with the payload embedded under the "#firmware" key.
+    /// Takes a small reference manifest and one or more separate payload files,
+    /// and produces a new envelope with the payloads embedded.
     /// The manifest signature is preserved (it covers only the manifest, not payloads).
+    ///
+    /// For single payload: `-p payload.bin --key "#firmware"`
+    /// For multiple: `-p payload.bin --key "#firmware" -p kernel.bin --key "#kernel"`
     Attach {
         /// Reference manifest file (SUIT envelope without integrated payload)
         #[arg(short, long)]
         manifest: PathBuf,
 
-        /// Payload file to embed
+        /// Payload file(s) to embed (repeatable)
         #[arg(short, long)]
-        payload: PathBuf,
+        payload: Vec<PathBuf>,
 
         /// Output envelope file (manifest + integrated payload)
         #[arg(short, long)]
         output: PathBuf,
 
-        /// Payload key in the envelope (default: "#firmware")
-        #[arg(long, default_value = "#firmware")]
-        key: String,
+        /// Payload key(s) in the envelope (repeatable, matches -p order)
+        #[arg(long)]
+        key: Vec<String>,
     },
 
     /// Build an L1 campaign manifest.
@@ -193,20 +196,27 @@ enum Command {
     /// Reads the plaintext CEK and original enc-info, wraps the CEK for a
     /// new device public key, and outputs a new enc-info file. The payload
     /// ciphertext is unchanged — only the manifest needs rebuilding.
+    /// Re-wrap CEK(s) for a new device key (ECDH-ES+A128KW).
+    ///
+    /// Reads plaintext CEK(s) and original enc-info(s), wraps each CEK for
+    /// a new device public key, and outputs new enc-info file(s).
+    ///
+    /// Single:   `--cek X.cek --enc-info X.enc-info -o X.new.enc-info`
+    /// Multiple: `--cek K.cek --enc-info K.enc-info --cek R.cek --enc-info R.enc-info -o /tmp/out/`
     Rewrap {
-        /// Path to the plaintext CEK file (16 bytes, from a prior build)
+        /// Path(s) to plaintext CEK file(s) (16 bytes each, repeatable)
         #[arg(long)]
-        cek: PathBuf,
+        cek: Vec<PathBuf>,
 
-        /// Path to the original encryption_info CBOR file
+        /// Path(s) to original encryption_info CBOR file(s) (repeatable, matches --cek order)
         #[arg(long)]
-        enc_info: PathBuf,
+        enc_info: Vec<PathBuf>,
 
         /// Device public key file (COSE_Key CBOR, EC2 P-256)
         #[arg(long)]
         device_key: PathBuf,
 
-        /// Output path for the new encryption_info CBOR
+        /// Output path. Single CEK: file path. Multiple CEKs: directory (files named from input).
         #[arg(short, long)]
         output: PathBuf,
     },
@@ -464,12 +474,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             output,
             key,
         } => {
+            // Default key for backward compatibility
+            let keys: Vec<String> = if key.is_empty() {
+                payload.iter().map(|_| "#firmware".to_string()).collect()
+            } else {
+                key
+            };
+
+            if payload.len() != keys.len() {
+                return Err(format!(
+                    "mismatched -p and --key counts: {} payloads, {} keys",
+                    payload.len(), keys.len()
+                ).into());
+            }
+
             let manifest_data = fs::read(&manifest)?;
-            let payload_data = fs::read(&payload)?;
-            eprintln!("Attaching payload ({} bytes) as {:?}", payload_data.len(), key);
 
             // Work at raw CBOR level to preserve the original signature.
-            // The envelope is a CBOR map — we just append a new text-keyed entry.
             let value: ciborium::Value = ciborium::de::from_reader(manifest_data.as_slice())
                 .map_err(|e| format!("failed to decode CBOR: {e}"))?;
 
@@ -479,10 +500,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
 
             let mut new_entries = entries;
-            new_entries.push((
-                ciborium::Value::Text(key),
-                ciborium::Value::Bytes(payload_data),
-            ));
+            for (p, k) in payload.iter().zip(keys.iter()) {
+                let payload_data = fs::read(p)?;
+                eprintln!("Attaching payload ({} bytes) as {:?}", payload_data.len(), k);
+                new_entries.push((
+                    ciborium::Value::Text(k.clone()),
+                    ciborium::Value::Bytes(payload_data),
+                ));
+            }
 
             let new_map = ciborium::Value::Map(new_entries);
             let mut buf = Vec::new();
@@ -543,32 +568,54 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             device_key,
             output,
         } => {
-            let cek_bytes = fs::read(&cek)?;
-            if cek_bytes.len() != 16 {
-                return Err(format!("CEK must be 16 bytes, got {}", cek_bytes.len()).into());
+            if cek.len() != enc_info.len() {
+                return Err(format!(
+                    "mismatched --cek and --enc-info counts: {} vs {}",
+                    cek.len(), enc_info.len()
+                ).into());
             }
-            let mut cek_arr = [0u8; 16];
-            cek_arr.copy_from_slice(&cek_bytes);
-
-            let enc_info_bytes = fs::read(&enc_info)?;
-            let iv = encryptor::extract_iv_from_enc_info(&enc_info_bytes)?;
+            if cek.is_empty() {
+                return Err("at least one --cek + --enc-info pair required".into());
+            }
 
             let dk_bytes = fs::read(&device_key)?;
             let dk = CoseKey::from_cose_key_bytes(&dk_bytes)?;
-
             let recipient = Recipient {
                 public_key: dk,
                 kid: device_key.to_string_lossy().as_bytes().to_vec(),
             };
 
-            let new_enc_info = encryptor::rewrap_cek_ecdh(&cek_arr, &iv, &recipient)?;
+            for (i, (cek_path, ei_path)) in cek.iter().zip(enc_info.iter()).enumerate() {
+                let cek_bytes = fs::read(cek_path)?;
+                if cek_bytes.len() != 16 {
+                    return Err(format!("CEK {} must be 16 bytes, got {}", cek_path.display(), cek_bytes.len()).into());
+                }
+                let mut cek_arr = [0u8; 16];
+                cek_arr.copy_from_slice(&cek_bytes);
 
-            fs::write(&output, &new_enc_info)?;
-            eprintln!(
-                "Wrote re-wrapped encryption info to {} ({} bytes)",
-                output.display(),
-                new_enc_info.len()
-            );
+                let enc_info_bytes = fs::read(ei_path)?;
+                let iv = encryptor::extract_iv_from_enc_info(&enc_info_bytes)?;
+
+                let new_enc_info = encryptor::rewrap_cek_ecdh(&cek_arr, &iv, &recipient)?;
+
+                // Single CEK: output is a file. Multiple: output is a directory.
+                let out_path = if cek.len() == 1 {
+                    output.clone()
+                } else {
+                    let name = ei_path.file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_else(|| format!("enc-info-{i}"));
+                    fs::create_dir_all(&output)?;
+                    output.join(name)
+                };
+
+                fs::write(&out_path, &new_enc_info)?;
+                eprintln!(
+                    "Wrote re-wrapped encryption info to {} ({} bytes)",
+                    out_path.display(),
+                    new_enc_info.len()
+                );
+            }
         }
     }
 
@@ -655,9 +702,15 @@ fn process_payload(
 
 /// Build a SUIT manifest from a YAML descriptor.
 fn build_from_manifest(desc: manifest::ManifestDescriptor) -> Result<(), Box<dyn std::error::Error>> {
+    if desc.is_multi_component() {
+        return build_multi_component_manifest(desc);
+    }
+
     let key_bytes = fs::read(&desc.signing_key)?;
     let key = CoseKey::from_cose_key_bytes(&key_bytes)?;
-    let comp_id = desc.component_id.to_vec();
+    let comp_id = desc.component_id
+        .ok_or("component_id required for single-component manifest")?
+        .to_vec();
 
     // Determine payload mode
     let (digest, fw_size, final_payload, enc_info, cek) = match desc.payload {
@@ -779,6 +832,114 @@ fn build_from_manifest(desc: manifest::ManifestDescriptor) -> Result<(), Box<dyn
             }
         }
     }
+
+    Ok(())
+}
+
+/// Build a multi-component SUIT manifest from a YAML descriptor.
+fn build_multi_component_manifest(desc: manifest::ManifestDescriptor) -> Result<(), Box<dyn std::error::Error>> {
+    use sumo_offboard::image_builder::{MultiComponentBuilder, ComponentSpec};
+
+    let key_bytes = fs::read(&desc.signing_key)?;
+    let key = CoseKey::from_cose_key_bytes(&key_bytes)?;
+
+    let components = desc.components.unwrap();
+    let mut builder = MultiComponentBuilder::new()
+        .sequence_number(desc.sequence_number);
+
+    if let Some(sv) = desc.security_version {
+        builder = builder.security_version(sv);
+    }
+    if let Some(ref meta) = desc.metadata {
+        if let Some(ref v) = meta.version { builder = builder.text_version(v); }
+        if let Some(ref m) = meta.model_name { builder = builder.text_model_name(m); }
+        if let Some(ref d) = meta.description { builder = builder.text_description(d); }
+    }
+
+    // Process each component
+    for comp_desc in &components {
+        let payload = &comp_desc.payload;
+        let uri = payload.uri.clone().unwrap_or_else(|| "#firmware".into());
+
+        if let Some(ref file_path) = payload.file {
+            // Full build mode: read file, compress, encrypt
+            let fw_data = if file_path == "-" {
+                let mut buf = Vec::new();
+                std::io::stdin().read_to_end(&mut buf)?;
+                buf
+            } else {
+                fs::read(file_path)?
+            };
+
+            let encrypt_paths: Vec<std::path::PathBuf> = payload.encrypt
+                .as_ref()
+                .map(|e| e.device_keys.clone())
+                .unwrap_or_default();
+
+            let (digest, fw_size, processed, enc_info, cek) =
+                process_payload(&fw_data, payload.compress, &encrypt_paths)?;
+
+            builder = builder.add_component(ComponentSpec {
+                id: comp_desc.id.to_vec(),
+                digest: digest.to_vec(),
+                size: fw_size,
+                uri: uri.clone(),
+                encryption_info: enc_info.clone(),
+            });
+
+            // Write separate payload if output.payloads specifies a path
+            if let Some(ref payloads_map) = desc.output.payloads {
+                if let Some(po) = payloads_map.get(&uri) {
+                    fs::write(po, &processed)?;
+                    eprintln!("Wrote payload to {} ({} bytes)", po.display(), processed.len());
+
+                    if let Some(ref ei) = enc_info {
+                        let ei_path = std::path::PathBuf::from(format!("{}.enc-info", po.display()));
+                        fs::write(&ei_path, ei)?;
+                        eprintln!("Wrote encryption info to {} ({} bytes)", ei_path.display(), ei.len());
+                    }
+                    if let Some(ref cek_bytes) = cek {
+                        let cek_path = std::path::PathBuf::from(format!("{}.cek", po.display()));
+                        fs::write(&cek_path, cek_bytes)?;
+                        eprintln!("Wrote CEK to {} (SENSITIVE)", cek_path.display());
+                    }
+                }
+            } else {
+                // Integrated payload
+                builder = builder.integrated_payload(uri.clone(), processed);
+            }
+        } else if let (Some(ref digest_hex), Some(size)) = (&payload.digest, payload.size) {
+            // Reference build mode
+            let digest = parse_digest_hex(digest_hex)?;
+            let enc_info = payload.encryption_info
+                .as_ref()
+                .map(|p| fs::read(p))
+                .transpose()
+                .map_err(|e| format!("read encryption_info: {e}"))?;
+
+            builder = builder.add_component(ComponentSpec {
+                id: comp_desc.id.to_vec(),
+                digest: digest.to_vec(),
+                size,
+                uri: uri.clone(),
+                encryption_info: enc_info,
+            });
+        } else {
+            return Err(format!(
+                "component {:?}: need either 'file' or 'digest' + 'size'",
+                comp_desc.id.to_vec()
+            ).into());
+        }
+    }
+
+    let envelope = builder.build(&key)?;
+    fs::write(&desc.output.manifest, &envelope)?;
+    eprintln!(
+        "Wrote multi-component manifest to {} ({} bytes, {} components)",
+        desc.output.manifest.display(),
+        envelope.len(),
+        components.len(),
+    );
 
     Ok(())
 }

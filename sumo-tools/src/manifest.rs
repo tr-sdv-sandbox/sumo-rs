@@ -8,10 +8,15 @@ use std::path::PathBuf;
 use serde::Deserialize;
 
 /// Top-level YAML manifest descriptor.
+///
+/// Two modes:
+/// - **Single component**: uses `component_id` + `payload` (existing, backward compatible)
+/// - **Multi component**: uses `components` array (new, for kernel + rootfs)
 #[derive(Debug, Deserialize)]
 pub struct ManifestDescriptor {
-    /// Component ID segments. Either a single string `"os1"` or list `["hsm", "keys"]`.
-    pub component_id: ComponentId,
+    /// Component ID segments (single-component mode).
+    #[serde(default)]
+    pub component_id: Option<ComponentId>,
 
     /// Monotonically increasing sequence number.
     pub sequence_number: u64,
@@ -23,9 +28,14 @@ pub struct ManifestDescriptor {
     /// Path to the signing key file (COSE_Key CBOR).
     pub signing_key: PathBuf,
 
-    /// Payload configuration. Omit entirely for CRL/policy-only manifests.
+    /// Payload configuration (single-component mode).
     #[serde(default)]
     pub payload: Option<PayloadDescriptor>,
+
+    /// Multi-component mode: array of component specs.
+    /// When present, `component_id` and `payload` are ignored.
+    #[serde(default)]
+    pub components: Option<Vec<ComponentDescriptor>>,
 
     /// Output paths.
     pub output: OutputDescriptor,
@@ -33,6 +43,23 @@ pub struct ManifestDescriptor {
     /// Human-readable metadata.
     #[serde(default)]
     pub metadata: Option<MetadataDescriptor>,
+}
+
+impl ManifestDescriptor {
+    /// Check if this is a multi-component manifest.
+    pub fn is_multi_component(&self) -> bool {
+        self.components.as_ref().map_or(false, |c| !c.is_empty())
+    }
+}
+
+/// A single component in a multi-component manifest.
+#[derive(Debug, Deserialize)]
+pub struct ComponentDescriptor {
+    /// Component ID segments (e.g., `["os1", "kernel"]`).
+    pub id: ComponentId,
+
+    /// Payload configuration for this component.
+    pub payload: PayloadDescriptor,
 }
 
 /// Component ID: accepts both `"os1"` (single string) and `["hsm", "keys"]` (list).
@@ -103,10 +130,15 @@ pub struct OutputDescriptor {
     /// Path for the signed SUIT envelope.
     pub manifest: PathBuf,
 
-    /// Path for separate (non-integrated) encrypted payload.
+    /// Path for separate (non-integrated) encrypted payload (single-component mode).
     /// If omitted, payload is integrated into the envelope.
     #[serde(default)]
     pub payload: Option<PathBuf>,
+
+    /// Paths for separate payloads (multi-component mode).
+    /// Keys match the component URIs (e.g., `"#kernel"`, `"#firmware"`).
+    #[serde(default)]
+    pub payloads: Option<std::collections::HashMap<String, PathBuf>>,
 }
 
 /// Human-readable metadata fields (all optional).
@@ -157,7 +189,7 @@ metadata:
   description: "OS1 rootfs update v1.1.0"
 "##;
         let desc: ManifestDescriptor = serde_yaml::from_str(yaml).unwrap();
-        assert_eq!(desc.component_id.to_vec(), vec!["os1"]);
+        assert_eq!(desc.component_id.as_ref().unwrap().to_vec(), vec!["os1"]);
         assert_eq!(desc.sequence_number, 2);
         assert_eq!(desc.security_version, Some(1));
 
@@ -196,7 +228,7 @@ metadata:
   version: "1.2.0"
 "##;
         let desc: ManifestDescriptor = serde_yaml::from_str(yaml).unwrap();
-        assert_eq!(desc.component_id.to_vec(), vec!["os1"]);
+        assert_eq!(desc.component_id.as_ref().unwrap().to_vec(), vec!["os1"]);
         assert_eq!(desc.sequence_number, 3);
 
         let payload = desc.payload.unwrap();
@@ -223,7 +255,7 @@ metadata:
   description: "CRL: block security_version < 2"
 "##;
         let desc: ManifestDescriptor = serde_yaml::from_str(yaml).unwrap();
-        assert_eq!(desc.component_id.to_vec(), vec!["os1"]);
+        assert_eq!(desc.component_id.as_ref().unwrap().to_vec(), vec!["os1"]);
         assert_eq!(desc.sequence_number, 100);
         assert_eq!(desc.security_version, Some(2));
         assert!(desc.payload.is_none());
@@ -239,7 +271,7 @@ output:
   manifest: hsm-keys.suit
 "##;
         let desc: ManifestDescriptor = serde_yaml::from_str(yaml).unwrap();
-        assert_eq!(desc.component_id.to_vec(), vec!["hsm", "keys"]);
+        assert_eq!(desc.component_id.as_ref().unwrap().to_vec(), vec!["hsm", "keys"]);
     }
 
     #[test]
@@ -252,7 +284,7 @@ output:
   manifest: out.suit
 "##;
         let desc: ManifestDescriptor = serde_yaml::from_str(yaml).unwrap();
-        assert_eq!(desc.component_id.to_vec(), vec!["os1"]);
+        assert_eq!(desc.component_id.as_ref().unwrap().to_vec(), vec!["os1"]);
     }
 
     #[test]
@@ -298,5 +330,88 @@ metadata:
         let meta = desc.metadata.unwrap();
         assert_eq!(meta.vendor_id.as_deref(), Some("fa6b4a53d5ad5fdfbe9de4e97d85cd2b"));
         assert_eq!(meta.class_id.as_deref(), Some("1492af1425695e48bf429b2d51f2ab45"));
+    }
+
+    #[test]
+    fn parse_multi_component_manifest() {
+        let yaml = r##"
+sequence_number: 1
+security_version: 1
+signing_key: keys/signing.key
+
+components:
+  - id: ["os1", "kernel"]
+    payload:
+      file: firmware/bzImage
+      uri: "#kernel"
+      compress: true
+      encrypt:
+        device_keys: ["keys/device.key"]
+  - id: ["os1", "rootfs"]
+    payload:
+      file: firmware/rootfs.img
+      uri: "#firmware"
+      compress: true
+      encrypt:
+        device_keys: ["keys/device.key"]
+
+output:
+  manifest: os1-v1.0.0.suit
+  payloads:
+    "#kernel": firmware/kernel-payload.bin
+    "#firmware": firmware/rootfs-payload.bin
+
+metadata:
+  version: "1.0.0"
+  model_name: "OS1-Linux"
+"##;
+        let desc: ManifestDescriptor = serde_yaml::from_str(yaml).unwrap();
+        assert!(desc.is_multi_component());
+        assert!(desc.component_id.is_none());
+        assert!(desc.payload.is_none());
+
+        let components = desc.components.unwrap();
+        assert_eq!(components.len(), 2);
+        assert_eq!(components[0].id.to_vec(), vec!["os1", "kernel"]);
+        assert_eq!(components[0].payload.uri.as_deref(), Some("#kernel"));
+        assert_eq!(components[1].id.to_vec(), vec!["os1", "rootfs"]);
+        assert_eq!(components[1].payload.uri.as_deref(), Some("#firmware"));
+
+        let payloads = desc.output.payloads.unwrap();
+        assert_eq!(payloads.len(), 2);
+        assert!(payloads.contains_key("#kernel"));
+        assert!(payloads.contains_key("#firmware"));
+    }
+
+    #[test]
+    fn parse_multi_component_reference() {
+        let yaml = r##"
+sequence_number: 2
+security_version: 1
+signing_key: keys/signing.key
+
+components:
+  - id: ["os1", "kernel"]
+    payload:
+      digest: "aabbccdd00112233aabbccdd00112233aabbccdd00112233aabbccdd00112233"
+      size: 10000000
+      encryption_info: firmware/kernel-payload.bin.enc-info
+      uri: "#kernel"
+  - id: ["os1", "rootfs"]
+    payload:
+      digest: "11223344556677881122334455667788112233445566778811223344556677aa"
+      size: 2147483648
+      encryption_info: firmware/rootfs-payload.bin.enc-info
+      uri: "#firmware"
+
+output:
+  manifest: os1-v1.1.0.suit
+"##;
+        let desc: ManifestDescriptor = serde_yaml::from_str(yaml).unwrap();
+        assert!(desc.is_multi_component());
+        let components = desc.components.unwrap();
+        assert!(components[0].payload.file.is_none());
+        assert!(components[0].payload.digest.is_some());
+        assert!(components[1].payload.digest.is_some());
     }
 }
