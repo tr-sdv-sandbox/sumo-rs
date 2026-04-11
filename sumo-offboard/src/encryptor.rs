@@ -8,10 +8,15 @@ use crate::recipient::Recipient;
 use sumo_crypto::cose_key as ck;
 use sumo_crypto::CryptoBackend;
 
-/// Encrypted payload: ciphertext + COSE_Encrypt info.
+/// Encrypted payload: ciphertext + COSE_Encrypt info + plaintext CEK.
+///
+/// The CEK (Content Encryption Key) is included so callers can persist it
+/// and later re-wrap it for additional device keys without re-encrypting
+/// the payload. Treat the CEK as highly sensitive.
 pub struct EncryptedPayload {
     pub ciphertext: Vec<u8>,
     pub encryption_info: Vec<u8>,
+    pub cek: [u8; 16],
 }
 
 /// Encrypt firmware with A128KW key wrapping.
@@ -56,7 +61,7 @@ pub fn encrypt_firmware(
     }
 
     let encryption_info = build_cose_encrypt(&iv, rcpt_values)?;
-    Ok(EncryptedPayload { ciphertext, encryption_info })
+    Ok(EncryptedPayload { ciphertext, encryption_info, cek })
 }
 
 /// Encrypt firmware with ECDH-ES+A128KW key agreement.
@@ -125,7 +130,107 @@ pub fn encrypt_firmware_ecdh(
     }
 
     let encryption_info = build_cose_encrypt(&iv, rcpt_values)?;
-    Ok(EncryptedPayload { ciphertext, encryption_info })
+    Ok(EncryptedPayload { ciphertext, encryption_info, cek })
+}
+
+/// Extract the IV from an existing COSE_Encrypt CBOR structure (enc-info file).
+///
+/// Used for rewrap: read the original enc-info to get the IV, then
+/// build a new COSE_Encrypt with the same IV but different recipients.
+pub fn extract_iv_from_enc_info(enc_info: &[u8]) -> Result<[u8; 12], OffboardError> {
+    let value: Value = ciborium::de::from_reader(enc_info)
+        .map_err(|_| OffboardError::Other("invalid COSE_Encrypt CBOR".into()))?;
+
+    let arr = match &value {
+        Value::Array(a) => a,
+        _ => return Err(OffboardError::Other("COSE_Encrypt not an array".into())),
+    };
+
+    if arr.len() < 2 {
+        return Err(OffboardError::Other("COSE_Encrypt too short".into()));
+    }
+
+    // arr[1] = unprotected header map, IV is label 5
+    let iv_bytes = match &arr[1] {
+        Value::Map(entries) => entries
+            .iter()
+            .find_map(|(k, v)| {
+                if let (Value::Integer(i), Value::Bytes(b)) = (k, v) {
+                    if i128::from(*i) == 5 { Some(b.clone()) } else { None }
+                } else {
+                    None
+                }
+            })
+            .ok_or_else(|| OffboardError::Other("IV not found in COSE_Encrypt".into()))?,
+        _ => return Err(OffboardError::Other("unprotected header not a map".into())),
+    };
+
+    if iv_bytes.len() != 12 {
+        return Err(OffboardError::Other(format!(
+            "IV is {} bytes, expected 12", iv_bytes.len()
+        )));
+    }
+    let mut iv = [0u8; 12];
+    iv.copy_from_slice(&iv_bytes);
+    Ok(iv)
+}
+
+/// Re-wrap an existing CEK for a new ECDH-ES+A128KW recipient.
+///
+/// Produces a new COSE_Encrypt structure that reuses the same IV
+/// (so the existing ciphertext remains valid) but wraps the CEK for a
+/// different device's public key using a fresh ephemeral sender key.
+///
+/// Use case: firmware was encrypted once with a random CEK. For each new
+/// device, re-wrap the CEK for that device's key — no re-encryption needed.
+pub fn rewrap_cek_ecdh(
+    cek: &[u8; 16],
+    iv: &[u8; 12],
+    recipient: &Recipient,
+) -> Result<Vec<u8>, OffboardError> {
+    let crypto = sumo_crypto::RustCryptoBackend::new();
+
+    // Generate fresh ephemeral sender key for this recipient
+    let sender_key = crate::keygen::generate_device_key(crate::keygen::ES256)?;
+    let sender_ec2 = ck::extract_ec2(sender_key.inner())
+        .map_err(|e| OffboardError::Crypto(e))?;
+    let sender_d = sender_ec2.d.ok_or_else(|| {
+        OffboardError::Other("ephemeral key missing private material".into())
+    })?;
+    let sender_pub = build_ec2_pub_cose_key(&sender_ec2.x, &sender_ec2.y);
+
+    // Protected header for ECDH-ES+A128KW: {1: -29}
+    let protected = encode_protected_alg(ck::COSE_ALG_ECDH_ES_A128KW)?;
+
+    // Extract recipient public key
+    let rcpt_ec2 = ck::extract_ec2(recipient.public_key.inner())
+        .map_err(|e| OffboardError::Crypto(e))?;
+    let mut rcpt_pub = [0u8; 65];
+    rcpt_pub[0] = 0x04;
+    rcpt_pub[1..33].copy_from_slice(&rcpt_ec2.x);
+    rcpt_pub[33..65].copy_from_slice(&rcpt_ec2.y);
+
+    // Wrap CEK for the recipient
+    let wrapped = sumo_crypto::ecdh_es::ecdh_es_a128kw_wrap(
+        &crypto,
+        &sender_d,
+        &rcpt_pub,
+        cek,
+        &protected,
+    )
+    .map_err(|e| OffboardError::Crypto(e))?;
+
+    // Build single COSE_recipient
+    let rcpt_value = Value::Array(vec![
+        Value::Bytes(protected),
+        Value::Map(vec![
+            (int_val(4), Value::Bytes(recipient.kid.clone())),
+            (int_val(-1), sender_pub),
+        ]),
+        Value::Bytes(wrapped),
+    ]);
+
+    build_cose_encrypt(iv, vec![rcpt_value])
 }
 
 /// Compress firmware with zstd.

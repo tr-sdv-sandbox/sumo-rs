@@ -187,6 +187,29 @@ enum Command {
         #[arg(long)]
         class: Option<String>,
     },
+
+    /// Re-wrap a CEK for a new device key (ECDH-ES+A128KW).
+    ///
+    /// Reads the plaintext CEK and original enc-info, wraps the CEK for a
+    /// new device public key, and outputs a new enc-info file. The payload
+    /// ciphertext is unchanged — only the manifest needs rebuilding.
+    Rewrap {
+        /// Path to the plaintext CEK file (16 bytes, from a prior build)
+        #[arg(long)]
+        cek: PathBuf,
+
+        /// Path to the original encryption_info CBOR file
+        #[arg(long)]
+        enc_info: PathBuf,
+
+        /// Device public key file (COSE_Key CBOR, EC2 P-256)
+        #[arg(long)]
+        device_key: PathBuf,
+
+        /// Output path for the new encryption_info CBOR
+        #[arg(short, long)]
+        output: PathBuf,
+    },
 }
 
 fn parse_uuid(hex_str: &str) -> Result<Uuid, String> {
@@ -294,7 +317,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let comp_id: Vec<String> = component.split(',').map(|s| s.to_string()).collect();
 
             // Two modes: firmware file (full build) or digest+size (reference build)
-            let (digest, fw_size, final_payload, enc_info) = if let Some(ref fw_path) = firmware {
+            let (digest, fw_size, final_payload, enc_info, cek) = if let Some(ref fw_path) = firmware {
                 if payload_digest_hex.is_some() || payload_size.is_some() {
                     return Err("cannot use --firmware with --payload-digest/--payload-size".into());
                 }
@@ -305,9 +328,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .map(|s| s.split(',').map(|p| PathBuf::from(p.trim())).collect())
                     .unwrap_or_default();
 
-                let (digest, fw_size, final_payload, enc_info) =
+                let (digest, fw_size, final_payload, enc_info, cek) =
                     process_payload(&fw_data, compress, &encrypt_paths)?;
-                (digest, fw_size, Some(final_payload), enc_info)
+                (digest, fw_size, Some(final_payload), enc_info, cek)
             } else {
                 // Reference build mode — no firmware file
                 let digest_hex = payload_digest_hex
@@ -326,7 +349,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .transpose()
                     .map_err(|e| format!("read --encryption-info: {e}"))?;
 
-                (digest, size, None, enc_info)
+                (digest, size, None, enc_info, None)
             };
 
             let mut builder = ImageManifestBuilder::new()
@@ -381,6 +404,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let ei_path = PathBuf::from(format!("{}.enc-info", po.display()));
                         fs::write(&ei_path, ei)?;
                         eprintln!("Wrote encryption info to {} ({} bytes)", ei_path.display(), ei.len());
+                    }
+                    if let Some(ref cek_bytes) = cek {
+                        let cek_path = PathBuf::from(format!("{}.cek", po.display()));
+                        fs::write(&cek_path, cek_bytes)?;
+                        eprintln!("Wrote CEK to {} (SENSITIVE)", cek_path.display());
                     }
                 }
             }
@@ -508,6 +536,40 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 envelope.len()
             );
         }
+
+        Command::Rewrap {
+            cek,
+            enc_info,
+            device_key,
+            output,
+        } => {
+            let cek_bytes = fs::read(&cek)?;
+            if cek_bytes.len() != 16 {
+                return Err(format!("CEK must be 16 bytes, got {}", cek_bytes.len()).into());
+            }
+            let mut cek_arr = [0u8; 16];
+            cek_arr.copy_from_slice(&cek_bytes);
+
+            let enc_info_bytes = fs::read(&enc_info)?;
+            let iv = encryptor::extract_iv_from_enc_info(&enc_info_bytes)?;
+
+            let dk_bytes = fs::read(&device_key)?;
+            let dk = CoseKey::from_cose_key_bytes(&dk_bytes)?;
+
+            let recipient = Recipient {
+                public_key: dk,
+                kid: device_key.to_string_lossy().as_bytes().to_vec(),
+            };
+
+            let new_enc_info = encryptor::rewrap_cek_ecdh(&cek_arr, &iv, &recipient)?;
+
+            fs::write(&output, &new_enc_info)?;
+            eprintln!(
+                "Wrote re-wrapped encryption info to {} ({} bytes)",
+                output.display(),
+                new_enc_info.len()
+            );
+        }
     }
 
     Ok(())
@@ -536,7 +598,7 @@ fn process_payload(
     fw_data: &[u8],
     compress: bool,
     encrypt_key_paths: &[PathBuf],
-) -> Result<([u8; 32], u64, Vec<u8>, Option<Vec<u8>>), Box<dyn std::error::Error>> {
+) -> Result<([u8; 32], u64, Vec<u8>, Option<Vec<u8>>, Option<[u8; 16]>), Box<dyn std::error::Error>> {
     let crypto = RustCryptoBackend::new();
 
     // Optionally compress
@@ -548,7 +610,7 @@ fn process_payload(
     };
 
     // Optionally encrypt
-    let (final_payload, enc_info) = if !encrypt_key_paths.is_empty() {
+    let (final_payload, enc_info, cek) = if !encrypt_key_paths.is_empty() {
         let recipients: Vec<Recipient> = encrypt_key_paths
             .iter()
             .map(|path| {
@@ -582,13 +644,13 @@ fn process_payload(
         };
 
         eprintln!("Encrypted payload: {} bytes", encrypted.ciphertext.len());
-        (encrypted.ciphertext, Some(encrypted.encryption_info))
+        (encrypted.ciphertext, Some(encrypted.encryption_info), Some(encrypted.cek))
     } else {
-        (payload, None)
+        (payload, None, None)
     };
 
     let digest = crypto.sha256(fw_data);
-    Ok((digest, fw_data.len() as u64, final_payload, enc_info))
+    Ok((digest, fw_data.len() as u64, final_payload, enc_info, cek))
 }
 
 /// Build a SUIT manifest from a YAML descriptor.
@@ -598,7 +660,7 @@ fn build_from_manifest(desc: manifest::ManifestDescriptor) -> Result<(), Box<dyn
     let comp_id = desc.component_id.to_vec();
 
     // Determine payload mode
-    let (digest, fw_size, final_payload, enc_info) = match desc.payload {
+    let (digest, fw_size, final_payload, enc_info, cek) = match desc.payload {
         None => {
             // CRL / policy-only manifest — no payload
             let mut builder = ImageManifestBuilder::new()
@@ -637,9 +699,9 @@ fn build_from_manifest(desc: manifest::ManifestDescriptor) -> Result<(), Box<dyn
                     .map(|e| e.device_keys.clone())
                     .unwrap_or_default();
 
-                let (digest, fw_size, processed, enc_info) =
+                let (digest, fw_size, processed, enc_info, cek) =
                     process_payload(&fw_data, payload.compress, &encrypt_paths)?;
-                (digest, fw_size, Some(processed), enc_info)
+                (digest, fw_size, Some(processed), enc_info, cek)
             } else if let (Some(ref digest_hex), Some(size)) = (&payload.digest, payload.size) {
                 // Reference build mode
                 let digest = parse_digest_hex(digest_hex)?;
@@ -649,7 +711,7 @@ fn build_from_manifest(desc: manifest::ManifestDescriptor) -> Result<(), Box<dyn
                     .map(|p| fs::read(p))
                     .transpose()
                     .map_err(|e| format!("read encryption_info: {e}"))?;
-                (digest, size, None, enc_info)
+                (digest, size, None, enc_info, None)
             } else {
                 return Err("payload section requires either 'file' or 'digest' + 'size'".into());
             }
@@ -695,7 +757,7 @@ fn build_from_manifest(desc: manifest::ManifestDescriptor) -> Result<(), Box<dyn
         envelope.len()
     );
 
-    // Write separate payload + enc-info if requested
+    // Write separate payload + enc-info + CEK if requested
     if let Some(ref po) = desc.output.payload {
         if let Some(ref fp) = final_payload {
             fs::write(po, fp)?;
@@ -709,6 +771,11 @@ fn build_from_manifest(desc: manifest::ManifestDescriptor) -> Result<(), Box<dyn
                     ei_path.display(),
                     ei.len()
                 );
+            }
+            if let Some(ref cek_bytes) = cek {
+                let cek_path = PathBuf::from(format!("{}.cek", po.display()));
+                fs::write(&cek_path, cek_bytes)?;
+                eprintln!("Wrote CEK to {} (SENSITIVE)", cek_path.display());
             }
         }
     }
