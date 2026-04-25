@@ -138,6 +138,22 @@ enum Command {
         input: PathBuf,
     },
 
+    /// Verify a SUIT envelope's COSE_Sign1 signature against a trust anchor.
+    ///
+    /// Mirrors what an onboard validator does — useful for diagnosing
+    /// mismatches between the signing key and the trust anchor without
+    /// needing to spin up a full SOVD server.
+    Verify {
+        /// SUIT envelope file
+        #[arg(short, long)]
+        input: PathBuf,
+
+        /// Trust anchor public key (COSE_Key CBOR — same format as
+        /// `signing.pub` produced by `sumo-tool keygen`).
+        #[arg(short = 'a', long)]
+        trust_anchor: PathBuf,
+    },
+
     /// Attach payload(s) to a reference manifest, creating an integrated envelope.
     ///
     /// Takes a small reference manifest and one or more separate payload files,
@@ -463,6 +479,44 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 Err(e) => {
                     eprintln!("Failed to decode envelope: {e:?}");
+                    std::process::exit(1);
+                }
+            }
+        }
+
+        Command::Verify { input, trust_anchor } => {
+            let data = fs::read(&input)?;
+            let anchor_bytes = fs::read(&trust_anchor)?;
+
+            println!("envelope:     {} ({} bytes)", input.display(), data.len());
+            println!("trust anchor: {} ({} bytes)", trust_anchor.display(), anchor_bytes.len());
+            println!("anchor hex:   {}", hex::encode(&anchor_bytes));
+
+            // Try to decode the envelope to surface the COSE_Sign1 protected
+            // header before validation, so we can see what alg/kid the
+            // signer wrote.
+            match sumo_codec::decode::decode_envelope(&data) {
+                Ok(envelope) => {
+                    println!("envelope decoded ✓ ({} signatures)",
+                             envelope.authentication.signatures.len());
+                    for (i, sig) in envelope.authentication.signatures.iter().enumerate() {
+                        println!("  signature[{i}]: {} bytes", sig.len());
+                    }
+                }
+                Err(e) => {
+                    eprintln!("envelope decode failed: {e:?}");
+                    std::process::exit(1);
+                }
+            }
+
+            let crypto = RustCryptoBackend::new();
+            let mut validator = sumo_onboard::validator::Validator::new(&anchor_bytes, None);
+            match validator.validate_envelope(&data, &crypto, 0) {
+                Ok(_) => {
+                    println!("VERIFY OK — signature matches trust anchor");
+                }
+                Err(e) => {
+                    eprintln!("VERIFY FAILED: {e:?}");
                     std::process::exit(1);
                 }
             }
