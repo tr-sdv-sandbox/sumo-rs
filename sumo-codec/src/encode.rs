@@ -46,23 +46,11 @@ where
     // Key 3: manifest
     entries.push((int_key(SUIT_MANIFEST), Value::Bytes(manifest_bytes)));
 
-    // Severed members at envelope level (keys 15, 16, 20, 23)
-    if let Some(ref dep_res) = envelope.manifest.severable.dependency_resolution {
-        let bstr = encode_command_sequence(dep_res)?;
-        entries.push((int_key(15), Value::Bytes(bstr)));
-    }
-    if let Some(ref pf) = envelope.manifest.severable.payload_fetch {
-        let bstr = encode_command_sequence(pf)?;
-        entries.push((int_key(16), Value::Bytes(bstr)));
-    }
-    if let Some(ref install) = envelope.manifest.severable.install {
-        let bstr = encode_command_sequence(install)?;
-        entries.push((int_key(20), Value::Bytes(bstr)));
-    }
-    if let Some(ref text) = envelope.manifest.severable.text {
-        let bstr = encode_text(text)?;
-        entries.push((int_key(23), Value::Bytes(bstr)));
-    }
+    // Severable members are emitted inline in the manifest map (keys 15,
+    // 16, 20, 23) — see encode_manifest. We do not emit a duplicate copy
+    // at the envelope level. SUIT permits both; we pick "inline" for
+    // simplicity and interop (libcsuit reads the manifest entry as the
+    // command sequence directly when present).
 
     // Integrated payloads (text string keys)
     for (key, payload) in &envelope.integrated_payloads {
@@ -100,18 +88,32 @@ pub fn encode_manifest(manifest: &SuitManifest) -> Result<Vec<u8>, CodecError> {
         entries.push((int_key(SUIT_INVOKE), Value::Bytes(bstr)));
     }
 
-    // Severable members as digest or inline
-    // For now, encode inline references (the actual content goes at envelope level)
+    // "Severable" members emitted inline. Order matters: libcsuit's
+    // canonical-CBOR check enforces ascending int64 keys, so 15 < 16 <
+    // 20 < 23 must be pushed in that order after the earlier 1-9 keys.
+
     // Key 15: dependency-resolution
-    if manifest.severable.dependency_resolution.is_some() {
-        // Encode as digest placeholder — the actual sequence goes at envelope level
-        // For simplicity, we just omit here (encoder puts at envelope level)
+    if let Some(ref dep_res) = manifest.severable.dependency_resolution {
+        let bstr = encode_command_sequence(dep_res)?;
+        entries.push((int_key(SUIT_DEPENDENCY_RESOLUTION), Value::Bytes(bstr)));
+    }
+
+    // Key 16: payload-fetch
+    if let Some(ref pf) = manifest.severable.payload_fetch {
+        let bstr = encode_command_sequence(pf)?;
+        entries.push((int_key(SUIT_PAYLOAD_FETCH), Value::Bytes(bstr)));
     }
 
     // Key 20: install
     if let Some(ref install) = manifest.severable.install {
         let bstr = encode_command_sequence(install)?;
         entries.push((int_key(SUIT_INSTALL), Value::Bytes(bstr)));
+    }
+
+    // Key 23: text
+    if let Some(ref text) = manifest.severable.text {
+        let bstr = encode_text(text)?;
+        entries.push((int_key(SUIT_TEXT), Value::Bytes(bstr)));
     }
 
     let manifest_map = Value::Map(entries);
@@ -195,11 +197,17 @@ fn encode_command_item(item: &CommandItem, out: &mut Vec<Value>) -> Result<(), C
 // --- Parameters ---
 
 fn encode_parameters(params: &[SuitParameter]) -> Result<Value, CodecError> {
-    let mut entries: Vec<(Value, Value)> = Vec::new();
+    let mut keyed: Vec<(i64, Value)> = Vec::with_capacity(params.len());
     for p in params {
-        let val = encode_parameter_value(&p.value)?;
-        entries.push((int_key(p.label), val));
+        keyed.push((p.label, encode_parameter_value(&p.value)?));
     }
+    // libcsuit enforces ascending int64 label order in the override-parameters
+    // map (suit_decode_parameters_list_from_item: NOT_CANONICAL_CBOR if a label
+    // is greater than the previous). Negative labels (private use, e.g. -257)
+    // therefore have to come *before* small positive ones — different from
+    // RFC 7049 byte-length-then-lexical canonical CBOR. Sort numerically here.
+    keyed.sort_by_key(|(k, _)| *k);
+    let entries = keyed.into_iter().map(|(k, v)| (int_key(k), v)).collect();
     Ok(Value::Map(entries))
 }
 

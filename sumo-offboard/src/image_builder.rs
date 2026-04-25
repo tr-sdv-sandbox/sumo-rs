@@ -226,7 +226,8 @@ impl ImageManifestBuilder {
 
         // Encode manifest to compute digest
         let manifest_bytes = sumo_codec::encode::encode_manifest(&manifest)?;
-        let digest_hash = crypto.sha256(&manifest_bytes);
+        // Hash bstr-wrapped manifest (RFC 9019 / libcsuit "include header")
+        let digest_hash = crypto.sha256(&cbor_bstr_wrap(&manifest_bytes));
 
         let envelope = SuitEnvelope {
             authentication: SuitAuthentication {
@@ -440,7 +441,8 @@ impl MultiComponentBuilder {
         };
 
         let manifest_bytes = sumo_codec::encode::encode_manifest(&manifest)?;
-        let digest_hash = crypto.sha256(&manifest_bytes);
+        // Hash bstr-wrapped manifest (RFC 9019 / libcsuit "include header")
+        let digest_hash = crypto.sha256(&cbor_bstr_wrap(&manifest_bytes));
 
         let envelope = SuitEnvelope {
             authentication: SuitAuthentication {
@@ -475,8 +477,12 @@ pub(crate) fn sign_manifest(
     key: &CoseKey,
     manifest_bytes: &[u8],
 ) -> Result<Vec<u8>, sumo_codec::CodecError> {
-    // Compute digest of manifest bytes
-    let digest = crypto.sha256(manifest_bytes);
+    // Compute digest over the bstr-wrapped manifest, matching the
+    // RFC 9019 convention used by libcsuit ("include header"). The bstr
+    // header bytes are part of what is hashed so that interop with C
+    // SUIT stacks works.
+    let wrapped = cbor_bstr_wrap(manifest_bytes);
+    let digest = crypto.sha256(&wrapped);
 
     // Build digest CBOR as the payload for COSE_Sign1
     let digest_cbor = encode_digest_cbor(&DigestInfo {
@@ -497,19 +503,54 @@ pub(crate) fn sign_manifest(
         .sign(key.inner(), &protected, &digest_cbor)
         .map_err(|_| sumo_codec::CodecError::CborEncode)?;
 
-    // Build COSE_Sign1 = [protected, unprotected, payload, signature]
+    // Build COSE_Sign1_Tagged = #6.18([protected, unprotected, payload, signature])
+    // Per SUIT (RFC 9019) the auth wrapper requires the CBOR-tagged form,
+    // and the payload is detached (Null) — the manifest digest is supplied
+    // by the surrounding SUIT_Authentication structure's first array slot.
     use ciborium::value::Value;
-    let sign1 = Value::Array(vec![
-        Value::Bytes(protected),
-        Value::Map(Vec::new()),
-        Value::Bytes(digest_cbor),
-        Value::Bytes(signature),
-    ]);
+    let sign1 = Value::Tag(
+        18,
+        Box::new(Value::Array(vec![
+            Value::Bytes(protected),
+            Value::Map(Vec::new()),
+            Value::Null,
+            Value::Bytes(signature),
+        ])),
+    );
+    let _ = digest_cbor; // signed-over but not embedded (detached)
 
     let mut buf = Vec::new();
     ciborium::ser::into_writer(&sign1, &mut buf)
         .map_err(|_| sumo_codec::CodecError::CborEncode)?;
     Ok(buf)
+}
+
+/// Public re-export so campaign_builder can share the same helper.
+pub(crate) fn cbor_bstr_wrap_pub(bytes: &[u8]) -> Vec<u8> { cbor_bstr_wrap(bytes) }
+
+/// Wrap raw bytes in a CBOR byte-string header, returning the on-the-wire
+/// bstr encoding. Used so manifest-digest hashes match libcsuit's
+/// "include header" convention.
+fn cbor_bstr_wrap(bytes: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(bytes.len() + 9);
+    let len = bytes.len();
+    if len < 24 {
+        out.push(0x40 | (len as u8));
+    } else if len <= 0xff {
+        out.push(0x58);
+        out.push(len as u8);
+    } else if len <= 0xffff {
+        out.push(0x59);
+        out.extend_from_slice(&(len as u16).to_be_bytes());
+    } else if len <= 0xffff_ffff {
+        out.push(0x5a);
+        out.extend_from_slice(&(len as u32).to_be_bytes());
+    } else {
+        out.push(0x5b);
+        out.extend_from_slice(&(len as u64).to_be_bytes());
+    }
+    out.extend_from_slice(bytes);
+    out
 }
 
 fn encode_digest_cbor(digest: &DigestInfo) -> Result<Vec<u8>, sumo_codec::CodecError> {

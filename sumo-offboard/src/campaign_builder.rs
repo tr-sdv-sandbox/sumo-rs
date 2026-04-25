@@ -208,7 +208,8 @@ impl CampaignBuilder {
 
         // Encode manifest to compute digest
         let manifest_bytes = sumo_codec::encode::encode_manifest(&manifest)?;
-        let digest_hash = crypto.sha256(&manifest_bytes);
+        // Hash bstr-wrapped manifest (RFC 9019 / libcsuit "include header")
+        let digest_hash = crypto.sha256(&crate::image_builder::cbor_bstr_wrap_pub(&manifest_bytes));
 
         let envelope = SuitEnvelope {
             authentication: SuitAuthentication {

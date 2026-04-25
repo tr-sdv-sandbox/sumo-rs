@@ -1,12 +1,55 @@
 //! SUIT envelope validator with trust anchor management.
 
-use coset::CborSerializable;
+use coset::{CborSerializable, TaggedCborSerializable};
 
 use crate::device_id::DeviceId;
 use crate::error::Sum2Error;
 use crate::manifest::Manifest;
-use sumo_codec::types::DigestAlgorithm;
+use sumo_codec::types::{DigestAlgorithm, DigestInfo};
 use sumo_crypto::CryptoBackend;
+
+/// Wrap bytes in a CBOR bstr header (matches libcsuit's
+/// `suit_generate_digest_include_header`). Used for the manifest-digest
+/// hash so cross-implementation interop holds.
+fn cbor_bstr_wrap(bytes: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(bytes.len() + 9);
+    let len = bytes.len();
+    if len < 24 {
+        out.push(0x40 | (len as u8));
+    } else if len <= 0xff {
+        out.push(0x58);
+        out.push(len as u8);
+    } else if len <= 0xffff {
+        out.push(0x59);
+        out.extend_from_slice(&(len as u16).to_be_bytes());
+    } else if len <= 0xffff_ffff {
+        out.push(0x5a);
+        out.extend_from_slice(&(len as u32).to_be_bytes());
+    } else {
+        out.push(0x5b);
+        out.extend_from_slice(&(len as u64).to_be_bytes());
+    }
+    out.extend_from_slice(bytes);
+    out
+}
+
+/// Re-encode a SUIT_Digest as `[alg, bytes]` CBOR for COSE_Sign1
+/// detached-payload verification.
+fn encode_digest_for_verify(d: &DigestInfo) -> Vec<u8> {
+    use ciborium::value::{Integer, Value};
+    let alg = match d.algorithm {
+        DigestAlgorithm::Sha256 => -16i64,
+        DigestAlgorithm::Sha384 => -43,
+        DigestAlgorithm::Sha512 => -44,
+    };
+    let arr = Value::Array(vec![
+        Value::Integer(Integer::from(alg)),
+        Value::Bytes(d.bytes.clone()),
+    ]);
+    let mut buf = Vec::new();
+    ciborium::ser::into_writer(&arr, &mut buf).expect("encode_digest");
+    buf
+}
 
 /// Validates SUIT envelopes against trust anchors and device policy.
 pub struct Validator {
@@ -88,10 +131,12 @@ impl Validator {
         let envelope = sumo_codec::decode::decode_envelope(envelope_bytes)
             .map_err(|_| Sum2Error::InvalidEnvelope)?;
 
-        // 2. Verify manifest digest
+        // 2. Verify manifest digest. The hash covers the bstr-wrapped
+        // manifest (header + content) per RFC 9019, matching libcsuit.
         let expected_digest = &envelope.authentication.digest;
+        let wrapped = cbor_bstr_wrap(&envelope.manifest_bytes);
         let actual_hash = match expected_digest.algorithm {
-            DigestAlgorithm::Sha256 => crypto.sha256(&envelope.manifest_bytes),
+            DigestAlgorithm::Sha256 => crypto.sha256(&wrapped),
             _ => return Err(Sum2Error::Unsupported),
         };
         if actual_hash.as_slice() != expected_digest.bytes.as_slice() {
@@ -101,7 +146,10 @@ impl Validator {
         // 3. Verify COSE_Sign1 signature(s) against trust anchors
         let mut any_sig_valid = false;
         for sig_bytes in &envelope.authentication.signatures {
-            let sign1 = coset::CoseSign1::from_slice(sig_bytes)
+            // Auth wrapper may carry COSE_Sign1 tagged (RFC 9019, #6.18)
+            // or as a bare array (legacy/permissive). Accept both.
+            let sign1 = coset::CoseSign1::from_tagged_slice(sig_bytes)
+                .or_else(|_| coset::CoseSign1::from_slice(sig_bytes))
                 .map_err(|_| Sum2Error::AuthFailed)?;
 
             // The payload in COSE_Sign1 for SUIT is the digest CBOR (already verified above)
@@ -117,8 +165,20 @@ impl Validator {
                     }
                 }
 
-                // Get the payload (digest CBOR bytes)
-                let payload = sign1.payload.as_deref().unwrap_or(&[]);
+                // SUIT auth wrapper carries the manifest digest in the
+                // outer array; the COSE_Sign1 payload slot is detached
+                // (Null). Reconstruct the digest CBOR bytes that were
+                // signed over from envelope.authentication.digest. If a
+                // legacy attached payload is present we still use it
+                // instead, but only after checking it matches the
+                // wrapper digest (so a non-spec envelope can't smuggle
+                // a different signed body past us).
+                let detached_payload = encode_digest_for_verify(expected_digest);
+                let payload: &[u8] = match sign1.payload.as_deref() {
+                    Some(attached) if attached == detached_payload.as_slice() => attached,
+                    Some(_) => return Err(Sum2Error::AuthFailed),
+                    None => &detached_payload,
+                };
 
                 let verify_result = crypto
                     .verify_sign1(anchor, protected_bytes, payload, &sign1.signature);
