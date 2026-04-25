@@ -85,6 +85,10 @@ enum Command {
         #[arg(long)]
         class: Option<String>,
 
+        /// Device UUID (hex, 16 bytes) — pins the manifest to a single device
+        #[arg(long)]
+        device: Option<String>,
+
         /// Payload fetch URI
         #[arg(long)]
         uri: Option<String>,
@@ -318,6 +322,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             seq,
             vendor,
             class,
+            device,
             uri,
             encrypt,
             compress,
@@ -388,6 +393,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             if let Some(c) = class {
                 builder = builder.class_id(parse_uuid(&c)?);
+            }
+            if let Some(d) = device {
+                builder = builder.device_id(parse_uuid(&d)?);
             }
             if let Some(u) = uri {
                 builder = builder.payload_uri(u);

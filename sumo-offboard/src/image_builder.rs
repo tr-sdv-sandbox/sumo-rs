@@ -20,6 +20,7 @@ pub struct ImageManifestBuilder {
     sequence_number: u64,
     vendor_id: Option<Uuid>,
     class_id: Option<Uuid>,
+    device_id: Option<Uuid>,
     version: Option<SemVer>,
     payload_digest: Option<Vec<u8>>,
     payload_size: u64,
@@ -42,6 +43,7 @@ impl ImageManifestBuilder {
             sequence_number: 0,
             vendor_id: None,
             class_id: None,
+            device_id: None,
             version: None,
             payload_digest: None,
             payload_size: 0,
@@ -62,6 +64,7 @@ impl ImageManifestBuilder {
     pub fn sequence_number(mut self, seq: u64) -> Self { self.sequence_number = seq; self }
     pub fn vendor_id(mut self, v: Uuid) -> Self { self.vendor_id = Some(v); self }
     pub fn class_id(mut self, c: Uuid) -> Self { self.class_id = Some(c); self }
+    pub fn device_id(mut self, d: Uuid) -> Self { self.device_id = Some(d); self }
     pub fn sem_ver(mut self, v: SemVer) -> Self { self.version = Some(v); self }
     pub fn payload_digest(mut self, sha256: &[u8], size: u64) -> Self {
         self.payload_digest = Some(sha256.to_vec());
@@ -104,6 +107,12 @@ impl ImageManifestBuilder {
             params.push(SuitParameter {
                 label: SUIT_PARAMETER_CLASS_IDENTIFIER,
                 value: ParameterValue::ClassId(*class),
+            });
+        }
+        if let Some(ref device) = self.device_id {
+            params.push(SuitParameter {
+                label: SUIT_PARAMETER_DEVICE_IDENTIFIER,
+                value: ParameterValue::DeviceId(*device),
             });
         }
         if let Some(ref digest_bytes) = self.payload_digest {
