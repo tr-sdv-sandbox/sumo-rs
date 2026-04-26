@@ -234,8 +234,29 @@ pub fn rewrap_cek_ecdh(
 }
 
 /// Compress firmware with zstd.
-pub fn compress_firmware(plaintext: &[u8], level: i32) -> Result<Vec<u8>, OffboardError> {
-    zstd::encode_all(plaintext, level).map_err(|e| OffboardError::Io(e))
+///
+/// `window_log`, if set, overrides zstd's default window selection.
+/// Constrained devices need this — the on-device decoder allocates a
+/// per-frame buffer sized after the frame header's `windowLog`, and
+/// zstd's stock level-based default (e.g. 19 = 512 KB at level 3)
+/// blows the heap on Cortex-M class targets. Pick the smallest value
+/// that still covers your firmware blobs (e.g. 10 = 1 KB window;
+/// 17 = 128 KB).
+pub fn compress_firmware(
+    plaintext: &[u8],
+    level: i32,
+    window_log: Option<u32>,
+) -> Result<Vec<u8>, OffboardError> {
+    use std::io::Write;
+    let mut encoder = zstd::Encoder::new(Vec::new(), level)
+        .map_err(OffboardError::Io)?;
+    if let Some(wl) = window_log {
+        encoder
+            .set_parameter(zstd::stream::raw::CParameter::WindowLog(wl))
+            .map_err(OffboardError::Io)?;
+    }
+    encoder.write_all(plaintext).map_err(OffboardError::Io)?;
+    encoder.finish().map_err(OffboardError::Io)
 }
 
 /// Compute SHA-256 digest.

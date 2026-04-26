@@ -101,6 +101,14 @@ enum Command {
         #[arg(long)]
         compress: bool,
 
+        /// Override zstd's window log for compression (e.g., 10 for a
+        /// 1 KB window). Pin this to the smallest value your target
+        /// device's decoder is configured to accept; the default zstd
+        /// pick (~19 at level 3) blows the heap on Cortex-M class
+        /// targets.
+        #[arg(long)]
+        zstd_window_log: Option<u32>,
+
         /// Write encrypted payload to this file (instead of embedding).
         /// Also writes {path}.enc-info with the encryption_info CBOR.
         #[arg(long)]
@@ -326,6 +334,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             uri,
             encrypt,
             compress,
+            zstd_window_log,
             payload_output,
             security_version,
             version,
@@ -360,7 +369,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .unwrap_or_default();
 
                 let (digest, fw_size, final_payload, enc_info, cek) =
-                    process_payload(&fw_data, compress, &encrypt_paths)?;
+                    process_payload(&fw_data, compress, zstd_window_log,
+                                    &encrypt_paths)?;
                 (digest, fw_size, Some(final_payload), enc_info, cek)
             } else {
                 // Reference build mode — no firmware file
@@ -706,6 +716,7 @@ fn parse_digest_hex(hex_str: &str) -> Result<[u8; 32], Box<dyn std::error::Error
 fn process_payload(
     fw_data: &[u8],
     compress: bool,
+    zstd_window_log: Option<u32>,
     encrypt_key_paths: &[PathBuf],
 ) -> Result<([u8; 32], u64, Vec<u8>, Option<Vec<u8>>, Option<[u8; 16]>), Box<dyn std::error::Error>> {
     let crypto = RustCryptoBackend::new();
@@ -713,7 +724,7 @@ fn process_payload(
     // Optionally compress
     let payload = if compress {
         eprintln!("Compressing payload ({} bytes)...", fw_data.len());
-        encryptor::compress_firmware(fw_data, 3)?
+        encryptor::compress_firmware(fw_data, 3, zstd_window_log)?
     } else {
         fw_data.to_vec()
     };
@@ -815,7 +826,8 @@ fn build_from_manifest(desc: manifest::ManifestDescriptor) -> Result<(), Box<dyn
                     .unwrap_or_default();
 
                 let (digest, fw_size, processed, enc_info, cek) =
-                    process_payload(&fw_data, payload.compress, &encrypt_paths)?;
+                    process_payload(&fw_data, payload.compress,
+                                    payload.zstd_window_log, &encrypt_paths)?;
                 (digest, fw_size, Some(processed), enc_info, cek)
             } else if let (Some(ref digest_hex), Some(size)) = (&payload.digest, payload.size) {
                 // Reference build mode
@@ -939,7 +951,8 @@ fn build_multi_component_manifest(desc: manifest::ManifestDescriptor) -> Result<
                 .unwrap_or_default();
 
             let (digest, fw_size, processed, enc_info, cek) =
-                process_payload(&fw_data, payload.compress, &encrypt_paths)?;
+                process_payload(&fw_data, payload.compress,
+                                payload.zstd_window_log, &encrypt_paths)?;
 
             builder = builder.add_component(ComponentSpec {
                 id: comp_desc.id.to_vec(),

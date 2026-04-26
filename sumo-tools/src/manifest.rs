@@ -98,6 +98,12 @@ pub struct PayloadDescriptor {
     #[serde(default)]
     pub compress: bool,
 
+    /// Override zstd's window log when compressing. Match the on-device
+    /// decoder's max — embedded targets need a small window so the
+    /// decompressor's per-frame allocation fits in their heap.
+    #[serde(default)]
+    pub zstd_window_log: Option<u32>,
+
     /// Encryption configuration.
     #[serde(default)]
     pub encrypt: Option<EncryptDescriptor>,

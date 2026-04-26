@@ -53,7 +53,7 @@ fn build_test_image(
 ) -> (Vec<u8>, Vec<u8>) {
     // Optionally compress
     let payload = if compress {
-        encryptor::compress_firmware(firmware, 3).unwrap()
+        encryptor::compress_firmware(firmware, 3, None).unwrap()
     } else {
         firmware.to_vec()
     };
@@ -357,7 +357,7 @@ fn compress_encrypt_decrypt_decompress() {
     let firmware: Vec<u8> = (0..65536u32).map(|i| (i % 251) as u8).collect();
 
     // Compress
-    let compressed = encryptor::compress_firmware(&firmware, 3).unwrap();
+    let compressed = encryptor::compress_firmware(&firmware, 3, None).unwrap();
     assert!(compressed.len() < firmware.len());
 
     // Encrypt the compressed data
