@@ -55,14 +55,14 @@ impl ManifestDescriptor {
 /// A single component in a multi-component manifest.
 #[derive(Debug, Deserialize)]
 pub struct ComponentDescriptor {
-    /// Component ID segments (e.g., `["os1", "kernel"]`).
+    /// Component ID segments (e.g., `["vm1", "kernel"]`).
     pub id: ComponentId,
 
     /// Payload configuration for this component.
     pub payload: PayloadDescriptor,
 }
 
-/// Component ID: accepts both `"os1"` (single string) and `["hsm", "keys"]` (list).
+/// Component ID: accepts both `"vm1"` (single string) and `["hsm", "keys"]` (list).
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 pub enum ComponentId {
@@ -173,7 +173,7 @@ mod tests {
     #[test]
     fn parse_full_manifest() {
         let yaml = r##"
-component_id: ["os1"]
+component_id: ["vm1"]
 sequence_number: 2
 security_version: 1
 signing_key: keys/signing.key
@@ -186,16 +186,16 @@ payload:
     device_keys: ["keys/device.pub"]
 
 output:
-  manifest: os1-v1.1.0.suit
+  manifest: vm1-v1.1.0.suit
   payload: firmware/payload.bin
 
 metadata:
   version: "1.1.0"
-  model_name: "OS1-Linux"
-  description: "OS1 rootfs update v1.1.0"
+  model_name: "VM1-Linux"
+  description: "VM1 rootfs update v1.1.0"
 "##;
         let desc: ManifestDescriptor = serde_yaml::from_str(yaml).unwrap();
-        assert_eq!(desc.component_id.as_ref().unwrap().to_vec(), vec!["os1"]);
+        assert_eq!(desc.component_id.as_ref().unwrap().to_vec(), vec!["vm1"]);
         assert_eq!(desc.sequence_number, 2);
         assert_eq!(desc.security_version, Some(1));
 
@@ -205,18 +205,18 @@ metadata:
         assert!(payload.compress);
         assert_eq!(payload.encrypt.unwrap().device_keys.len(), 1);
 
-        assert_eq!(desc.output.manifest, PathBuf::from("os1-v1.1.0.suit"));
+        assert_eq!(desc.output.manifest, PathBuf::from("vm1-v1.1.0.suit"));
         assert_eq!(desc.output.payload, Some(PathBuf::from("firmware/payload.bin")));
 
         let meta = desc.metadata.unwrap();
         assert_eq!(meta.version.as_deref(), Some("1.1.0"));
-        assert_eq!(meta.model_name.as_deref(), Some("OS1-Linux"));
+        assert_eq!(meta.model_name.as_deref(), Some("VM1-Linux"));
     }
 
     #[test]
     fn parse_reference_manifest() {
         let yaml = r##"
-component_id: "os1"
+component_id: "vm1"
 sequence_number: 3
 security_version: 1
 signing_key: keys/signing.key
@@ -228,13 +228,13 @@ payload:
   uri: "#firmware"
 
 output:
-  manifest: os1-v1.2.0.suit
+  manifest: vm1-v1.2.0.suit
 
 metadata:
   version: "1.2.0"
 "##;
         let desc: ManifestDescriptor = serde_yaml::from_str(yaml).unwrap();
-        assert_eq!(desc.component_id.as_ref().unwrap().to_vec(), vec!["os1"]);
+        assert_eq!(desc.component_id.as_ref().unwrap().to_vec(), vec!["vm1"]);
         assert_eq!(desc.sequence_number, 3);
 
         let payload = desc.payload.unwrap();
@@ -249,19 +249,19 @@ metadata:
     #[test]
     fn parse_crl_manifest() {
         let yaml = r##"
-component_id: "os1"
+component_id: "vm1"
 sequence_number: 100
 security_version: 2
 signing_key: keys/signing.key
 
 output:
-  manifest: os1-crl.suit
+  manifest: vm1-crl.suit
 
 metadata:
   description: "CRL: block security_version < 2"
 "##;
         let desc: ManifestDescriptor = serde_yaml::from_str(yaml).unwrap();
-        assert_eq!(desc.component_id.as_ref().unwrap().to_vec(), vec!["os1"]);
+        assert_eq!(desc.component_id.as_ref().unwrap().to_vec(), vec!["vm1"]);
         assert_eq!(desc.sequence_number, 100);
         assert_eq!(desc.security_version, Some(2));
         assert!(desc.payload.is_none());
@@ -283,14 +283,14 @@ output:
     #[test]
     fn parse_single_string_component_id() {
         let yaml = r##"
-component_id: os1
+component_id: vm1
 sequence_number: 1
 signing_key: k
 output:
   manifest: out.suit
 "##;
         let desc: ManifestDescriptor = serde_yaml::from_str(yaml).unwrap();
-        assert_eq!(desc.component_id.as_ref().unwrap().to_vec(), vec!["os1"]);
+        assert_eq!(desc.component_id.as_ref().unwrap().to_vec(), vec!["vm1"]);
     }
 
     #[test]
@@ -323,7 +323,7 @@ metadata:
     #[test]
     fn parse_minimal_metadata() {
         let yaml = r##"
-component_id: os1
+component_id: vm1
 sequence_number: 1
 signing_key: k
 output:
@@ -346,14 +346,14 @@ security_version: 1
 signing_key: keys/signing.key
 
 components:
-  - id: ["os1", "kernel"]
+  - id: ["vm1", "kernel"]
     payload:
       file: firmware/bzImage
       uri: "#kernel"
       compress: true
       encrypt:
         device_keys: ["keys/device.key"]
-  - id: ["os1", "rootfs"]
+  - id: ["vm1", "rootfs"]
     payload:
       file: firmware/rootfs.img
       uri: "#firmware"
@@ -362,14 +362,14 @@ components:
         device_keys: ["keys/device.key"]
 
 output:
-  manifest: os1-v1.0.0.suit
+  manifest: vm1-v1.0.0.suit
   payloads:
     "#kernel": firmware/kernel-payload.bin
     "#firmware": firmware/rootfs-payload.bin
 
 metadata:
   version: "1.0.0"
-  model_name: "OS1-Linux"
+  model_name: "VM1-Linux"
 "##;
         let desc: ManifestDescriptor = serde_yaml::from_str(yaml).unwrap();
         assert!(desc.is_multi_component());
@@ -378,9 +378,9 @@ metadata:
 
         let components = desc.components.unwrap();
         assert_eq!(components.len(), 2);
-        assert_eq!(components[0].id.to_vec(), vec!["os1", "kernel"]);
+        assert_eq!(components[0].id.to_vec(), vec!["vm1", "kernel"]);
         assert_eq!(components[0].payload.uri.as_deref(), Some("#kernel"));
-        assert_eq!(components[1].id.to_vec(), vec!["os1", "rootfs"]);
+        assert_eq!(components[1].id.to_vec(), vec!["vm1", "rootfs"]);
         assert_eq!(components[1].payload.uri.as_deref(), Some("#firmware"));
 
         let payloads = desc.output.payloads.unwrap();
@@ -397,13 +397,13 @@ security_version: 1
 signing_key: keys/signing.key
 
 components:
-  - id: ["os1", "kernel"]
+  - id: ["vm1", "kernel"]
     payload:
       digest: "aabbccdd00112233aabbccdd00112233aabbccdd00112233aabbccdd00112233"
       size: 10000000
       encryption_info: firmware/kernel-payload.bin.enc-info
       uri: "#kernel"
-  - id: ["os1", "rootfs"]
+  - id: ["vm1", "rootfs"]
     payload:
       digest: "11223344556677881122334455667788112233445566778811223344556677aa"
       size: 2147483648
@@ -411,7 +411,7 @@ components:
       uri: "#firmware"
 
 output:
-  manifest: os1-v1.1.0.suit
+  manifest: vm1-v1.1.0.suit
 "##;
         let desc: ManifestDescriptor = serde_yaml::from_str(yaml).unwrap();
         assert!(desc.is_multi_component());

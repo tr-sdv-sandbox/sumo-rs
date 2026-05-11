@@ -122,7 +122,7 @@ enum Command {
         #[arg(long)]
         version: Option<String>,
 
-        /// Model name (e.g., "OS1-Linux")
+        /// Model name (e.g., "VM1-Linux")
         #[arg(long)]
         model_name: Option<String>,
 

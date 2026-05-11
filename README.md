@@ -19,7 +19,7 @@ Rust implementation of the [SUIT](https://datatracker.ietf.org/doc/draft-ietf-su
 
 ```rust
 let envelope = ImageManifestBuilder::new()
-    .component_id(vec!["os1".into()])
+    .component_id(vec!["vm1".into()])
     .sequence_number(1)
     .security_version(1)                    // Anti-rollback floor (custom param -257)
     .payload_digest(&digest, size)
