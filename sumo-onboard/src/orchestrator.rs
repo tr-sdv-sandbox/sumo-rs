@@ -39,14 +39,18 @@ pub fn process_image(
     let mut write_offset: usize = 0;
 
     if has_encryption {
-        // Get device key for decryption
+        // Get device key for decryption. The orchestrator owns the
+        // raw key bytes here because it's a single-process flow
+        // (validator → decrypt → write); HSM-backed flows use a
+        // different entry point (see vm-mgr's streaming path).
         let device_keys = validator.device_keys();
         if device_keys.is_empty() {
             return Err(Sum2Error::DecryptFailed);
         }
         let device_key = &device_keys[0];
 
-        let mut decryptor = StreamingDecryptor::new(manifest, 0, device_key, crypto)?;
+        let unwrap = crate::decryptor::InMemoryKeyUnwrap::new(device_key, crypto);
+        let mut decryptor = StreamingDecryptor::new(manifest, 0, &unwrap, crypto)?;
 
         // Decrypt in chunks and detect compression
         let mut plaintext_buf = vec![0u8; CHUNK_SIZE + 256];

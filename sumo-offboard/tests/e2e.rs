@@ -12,7 +12,7 @@ use sumo_offboard::image_builder::ImageManifestBuilder;
 use sumo_offboard::campaign_builder::CampaignBuilder;
 use sumo_offboard::keygen;
 use sumo_offboard::recipient::Recipient;
-use sumo_onboard::decryptor::StreamingDecryptor;
+use sumo_onboard::decryptor::{InMemoryKeyUnwrap, StreamingDecryptor};
 use sumo_onboard::decompressor::StreamingDecompressor;
 use sumo_onboard::error::Sum2Error;
 use sumo_onboard::orchestrator;
@@ -263,7 +263,7 @@ fn encrypt_build_validate_decrypt() {
 
     // Decrypt
     let device_key_coset = coset::CoseKey::from_slice(&device_kek.to_cose_key_bytes()).unwrap();
-    let mut decryptor = StreamingDecryptor::new(&manifest, 0, &device_key_coset, &crypto).unwrap();
+    let unwrap = InMemoryKeyUnwrap::new(&device_key_coset, &crypto); let mut decryptor = StreamingDecryptor::new(&manifest, 0, &unwrap, &crypto).unwrap();
 
     let mut plaintext = vec![0u8; ciphertext.len() + 256];
     let mut total = 0;
@@ -293,7 +293,7 @@ fn streaming_decrypt_small_chunks() {
     let manifest = validator.validate_envelope(&envelope_bytes, &crypto, 0).unwrap();
 
     let device_key_coset = coset::CoseKey::from_slice(&device_kek.to_cose_key_bytes()).unwrap();
-    let mut decryptor = StreamingDecryptor::new(&manifest, 0, &device_key_coset, &crypto).unwrap();
+    let unwrap = InMemoryKeyUnwrap::new(&device_key_coset, &crypto); let mut decryptor = StreamingDecryptor::new(&manifest, 0, &unwrap, &crypto).unwrap();
 
     // Feed in 7-byte chunks (note: streaming impl accumulates, outputs all on finalize)
     let mut plaintext = Vec::new();
@@ -329,7 +329,7 @@ fn realistic_streaming_1mb() {
     let manifest = validator.validate_envelope(&envelope_bytes, &crypto, 0).unwrap();
 
     let device_key_coset = coset::CoseKey::from_slice(&device_kek.to_cose_key_bytes()).unwrap();
-    let mut decryptor = StreamingDecryptor::new(&manifest, 0, &device_key_coset, &crypto).unwrap();
+    let unwrap = InMemoryKeyUnwrap::new(&device_key_coset, &crypto); let mut decryptor = StreamingDecryptor::new(&manifest, 0, &unwrap, &crypto).unwrap();
 
     // Stream in 4KB chunks
     let mut buf = vec![0u8; firmware.len() + 256];
@@ -387,7 +387,7 @@ fn compress_encrypt_decrypt_decompress() {
 
     // Decrypt
     let device_key_coset = coset::CoseKey::from_slice(&device_kek.to_cose_key_bytes()).unwrap();
-    let mut decryptor = StreamingDecryptor::new(&manifest, 0, &device_key_coset, &crypto).unwrap();
+    let unwrap = InMemoryKeyUnwrap::new(&device_key_coset, &crypto); let mut decryptor = StreamingDecryptor::new(&manifest, 0, &unwrap, &crypto).unwrap();
 
     let mut decrypted = Vec::new();
     let mut buf = vec![0u8; 4096 + 256];
@@ -434,7 +434,7 @@ fn ecdh_encrypt_decrypt() {
 
     // Decrypt with device private key
     let device_key_coset = coset::CoseKey::from_slice(&device_key.to_cose_key_bytes()).unwrap();
-    let mut decryptor = StreamingDecryptor::new(&manifest, 0, &device_key_coset, &crypto).unwrap();
+    let unwrap = InMemoryKeyUnwrap::new(&device_key_coset, &crypto); let mut decryptor = StreamingDecryptor::new(&manifest, 0, &unwrap, &crypto).unwrap();
 
     let mut plaintext = vec![0u8; ciphertext.len() + 256];
     let mut total = 0;

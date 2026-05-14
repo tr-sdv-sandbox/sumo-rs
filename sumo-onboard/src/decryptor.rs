@@ -3,6 +3,12 @@
 //! Parses COSE_Encrypt from the manifest's encryption-info parameter,
 //! unwraps the CEK (A128KW or ECDH-ES+A128KW), then provides a streaming
 //! AES-128-GCM decryption interface.
+//!
+//! CEK unwrap is delegated through the [`KeyUnwrap`] trait so the device
+//! private key can stay inside a hardware HSM (HSE/TPM/etc.) — the
+//! caller only ever sees the ephemeral per-payload CEK. For dev/test
+//! and unit tests, [`InMemoryKeyUnwrap`] keeps the original "device
+//! key is a `CoseKey` in memory" behavior available.
 
 use coset::CborSerializable;
 
@@ -12,21 +18,91 @@ use sumo_crypto::cose_key;
 use sumo_crypto::streaming::StreamingAeadDecryptor;
 use sumo_crypto::CryptoBackend;
 
+/// CEK-unwrap surface a decryptor calls. Implementors hold the device
+/// private key in whatever way they like — in memory for dev/test, or
+/// inside an HSM/HSE for production. Only the unwrapped 16-byte CEK is
+/// returned; the device key itself never crosses the trait boundary.
+pub trait KeyUnwrap {
+    /// AES-KW direct unwrap. The implementor's device key is the
+    /// symmetric KEK; `wrapped_cek` is the RFC-3394 wrapped output.
+    fn unwrap_cek_a128kw(&self, wrapped_cek: &[u8]) -> Result<Vec<u8>, Sum2Error>;
+
+    /// ECDH-ES+A128KW unwrap.
+    ///
+    /// `ephem_pub` is the sender's ephemeral EC-P256 public key in
+    /// uncompressed SEC1 form (65 bytes, leading 0x04). `wrapped_cek`
+    /// is the A128KW-wrapped CEK. `recipient_protected` is the COSE
+    /// protected header of the recipient — fed into the KDF context.
+    fn unwrap_cek_ecdh_es(
+        &self,
+        ephem_pub: &[u8],
+        wrapped_cek: &[u8],
+        recipient_protected: &[u8],
+    ) -> Result<Vec<u8>, Sum2Error>;
+}
+
+/// Dev/test [`KeyUnwrap`] impl that holds the device key as bytes in
+/// process memory. Suitable for unit tests, simulator setups, and any
+/// non-hardware scenario where the device key is just a file. **Not**
+/// suitable for production on real HSE — use an HSM-backed implementor
+/// instead.
+pub struct InMemoryKeyUnwrap<'a> {
+    pub device_key: &'a coset::CoseKey,
+    pub crypto: &'a dyn CryptoBackend,
+}
+
+impl<'a> InMemoryKeyUnwrap<'a> {
+    pub fn new(device_key: &'a coset::CoseKey, crypto: &'a dyn CryptoBackend) -> Self {
+        Self { device_key, crypto }
+    }
+}
+
+impl<'a> KeyUnwrap for InMemoryKeyUnwrap<'a> {
+    fn unwrap_cek_a128kw(&self, wrapped_cek: &[u8]) -> Result<Vec<u8>, Sum2Error> {
+        let k = extract_symmetric_key(self.device_key)?;
+        self.crypto
+            .aes_kw_unwrap(&k, wrapped_cek)
+            .map_err(|_| Sum2Error::DecryptFailed)
+    }
+
+    fn unwrap_cek_ecdh_es(
+        &self,
+        ephem_pub: &[u8],
+        wrapped_cek: &[u8],
+        recipient_protected: &[u8],
+    ) -> Result<Vec<u8>, Sum2Error> {
+        let dev_ec2 = cose_key::extract_ec2(self.device_key).map_err(|_| Sum2Error::DecryptFailed)?;
+        let dev_d = dev_ec2.d.ok_or(Sum2Error::DecryptFailed)?;
+        sumo_crypto::ecdh_es::ecdh_es_a128kw_unwrap(
+            self.crypto,
+            &dev_d,
+            ephem_pub,
+            wrapped_cek,
+            recipient_protected,
+        )
+        .map_err(|_| Sum2Error::DecryptFailed)
+    }
+}
+
 /// Streaming decryptor for encrypted SUIT payloads.
 pub struct StreamingDecryptor {
     inner: Box<dyn StreamingAeadDecryptor>,
 }
 
 impl StreamingDecryptor {
-    /// Create a decryptor from a manifest's encryption info and a device key.
+    /// Create a decryptor from a manifest's encryption info and a
+    /// caller-supplied [`KeyUnwrap`] (the abstraction over "wherever
+    /// the device private key lives — in memory or in an HSM").
     ///
-    /// Parses the COSE_Encrypt structure, determines the key agreement algorithm
-    /// (A128KW or ECDH-ES+A128KW), unwraps the CEK, and initializes streaming
-    /// AES-128-GCM decryption.
+    /// Parses the COSE_Encrypt structure, determines the key-agreement
+    /// algorithm (A128KW or ECDH-ES+A128KW), asks `key_unwrap` to
+    /// produce the 16-byte CEK, and initializes streaming AES-128-GCM
+    /// decryption. The device key itself never appears here; only the
+    /// ephemeral CEK is materialized.
     pub fn new(
         manifest: &Manifest,
         component_index: usize,
-        device_key: &coset::CoseKey,
+        key_unwrap: &dyn KeyUnwrap,
         crypto: &dyn CryptoBackend,
     ) -> Result<Self, Sum2Error> {
         let enc_info = manifest
@@ -36,8 +112,9 @@ impl StreamingDecryptor {
         // Parse COSE_Encrypt
         let parsed = parse_cose_encrypt(enc_info).map_err(|_| Sum2Error::DecryptFailed)?;
 
-        // Unwrap CEK based on recipient algorithm
-        let cek = unwrap_cek(&parsed, device_key, crypto)?;
+        // Unwrap CEK via the caller's abstraction. Different impls
+        // route this to in-memory crypto, vHSM, HSE, etc.
+        let cek = unwrap_cek_via(&parsed, key_unwrap)?;
         if cek.len() != 16 {
             return Err(Sum2Error::DecryptFailed);
         }
@@ -224,46 +301,32 @@ fn cbor_to_i64(v: &ciborium::value::Value) -> Option<i64> {
 
 // --- CEK unwrapping ---
 
-fn unwrap_cek(
+/// Parse the COSE_Encrypt's recipient algorithm and dispatch to the
+/// matching method on the caller's [`KeyUnwrap`] impl. The dispatcher
+/// is responsible for extracting the ephemeral public key from the
+/// recipient when the alg is ECDH-ES+A128KW — the unwrap implementor
+/// only needs to know how to do the math, not the COSE structure.
+fn unwrap_cek_via(
     parsed: &ParsedCoseEncrypt,
-    device_key: &coset::CoseKey,
-    crypto: &dyn CryptoBackend,
+    key_unwrap: &dyn KeyUnwrap,
 ) -> Result<Vec<u8>, Sum2Error> {
     match parsed.recipient_alg {
-        // A128KW — direct key wrap, device key is the symmetric KEK
-        cose_key::COSE_ALG_A128KW => {
-            // Extract symmetric key bytes from device_key
-            let k = extract_symmetric_key(device_key)?;
-            crypto
-                .aes_kw_unwrap(&k, &parsed.wrapped_cek)
-                .map_err(|_| Sum2Error::DecryptFailed)
-        }
-        // ECDH-ES+A128KW — key agreement + key wrap
+        cose_key::COSE_ALG_A128KW => key_unwrap.unwrap_cek_a128kw(&parsed.wrapped_cek),
         cose_key::COSE_ALG_ECDH_ES_A128KW => {
             let ephemeral = parsed
                 .ephemeral_key
                 .as_ref()
                 .ok_or(Sum2Error::DecryptFailed)?;
-
-            // Get ephemeral public key as uncompressed point
             let ec2 = cose_key::extract_ec2(ephemeral).map_err(|_| Sum2Error::DecryptFailed)?;
             let mut ephem_pub = [0u8; 65];
             ephem_pub[0] = 0x04;
             ephem_pub[1..33].copy_from_slice(&ec2.x);
             ephem_pub[33..65].copy_from_slice(&ec2.y);
-
-            // Get device private key scalar
-            let dev_ec2 = cose_key::extract_ec2(device_key).map_err(|_| Sum2Error::DecryptFailed)?;
-            let dev_d = dev_ec2.d.ok_or(Sum2Error::DecryptFailed)?;
-
-            sumo_crypto::ecdh_es::ecdh_es_a128kw_unwrap(
-                crypto,
-                &dev_d,
+            key_unwrap.unwrap_cek_ecdh_es(
                 &ephem_pub,
                 &parsed.wrapped_cek,
                 &parsed.recipient_protected,
             )
-            .map_err(|_| Sum2Error::DecryptFailed)
         }
         _ => Err(Sum2Error::Unsupported),
     }

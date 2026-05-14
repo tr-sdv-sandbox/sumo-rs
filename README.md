@@ -53,7 +53,11 @@ let compressed = encryptor::compress_firmware(&firmware, 3)?;
 let encrypted = encryptor::encrypt_firmware_ecdh(&compressed, &sender_key, &recipients)?;
 
 // Device: decrypt + decompress (streaming)
-let mut decryptor = StreamingDecryptor::new(&manifest, 0, &device_key, &crypto)?;
+// KeyUnwrap is the abstraction over "where does the device private key live" —
+// InMemoryKeyUnwrap is the dev/test path; production wires an HSM-backed
+// implementor that keeps the private key inside HSE.
+let unwrap = InMemoryKeyUnwrap::new(&device_key, &crypto);
+let mut decryptor = StreamingDecryptor::new(&manifest, 0, &unwrap, &crypto)?;
 decryptor.update(&ciphertext, &mut plaintext)?;
 decryptor.finalize(&mut plaintext)?;
 ```
