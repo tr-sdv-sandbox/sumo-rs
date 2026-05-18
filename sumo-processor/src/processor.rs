@@ -33,6 +33,11 @@ pub struct SuitProcessor<'a> {
     validator: &'a Validator,
     ops: &'a dyn PlatformOps,
     crypto: &'a dyn CryptoBackend,
+    // Reserved for future per-processor configuration (max iteration
+    // counts, optional-command policy, etc.). Stored on construction
+    // so the constructor's `config` arg stays meaningful even when no
+    // code path consults it yet.
+    #[allow(dead_code)]
     config: ProcessorConfig,
     /// Per-component parameter tables (populated from shared + per-sequence overrides)
     component_params: Vec<HashMap<i64, ParameterValue>>,

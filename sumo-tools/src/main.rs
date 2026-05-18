@@ -528,7 +528,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             let crypto = RustCryptoBackend::new();
-            let mut validator = sumo_onboard::validator::Validator::new(&anchor_bytes, None);
+            let validator = sumo_onboard::validator::Validator::new(&anchor_bytes, None);
             match validator.validate_envelope(&data, &crypto, 0) {
                 Ok(_) => {
                     println!("VERIFY OK — signature matches trust anchor");
