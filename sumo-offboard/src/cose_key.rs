@@ -94,6 +94,56 @@ impl CoseKey {
     pub(crate) fn inner(&self) -> &coset::CoseKey {
         &self.inner
     }
+
+    /// Extract the EC2 / P-256 private scalar `d` and return a
+    /// `p256::ecdsa::SigningKey`. Errors out if this key isn't an EC2
+    /// key with a private component.
+    pub fn to_p256_signing_key(&self) -> Result<p256::ecdsa::SigningKey, OffboardError> {
+        if !self.is_ec2() {
+            return Err(OffboardError::Other(
+                "expected EC2 P-256 key for signing".into(),
+            ));
+        }
+        let d = extract_label_bytes(&self.inner, -4)
+            .ok_or_else(|| OffboardError::Other("missing private scalar `d`".into()))?;
+        p256::ecdsa::SigningKey::from_bytes(d.as_slice().into()).map_err(|e| {
+            OffboardError::Other(format!("invalid P-256 signing key bytes: {e}"))
+        })
+    }
+
+    /// Extract the EC2 / P-256 public coordinates `(x, y)`. Each
+    /// 32 bytes. Errors out if this key isn't an EC2 key or the
+    /// coords aren't the expected length.
+    pub fn ec2_public_xy(&self) -> Result<(Vec<u8>, Vec<u8>), OffboardError> {
+        if !self.is_ec2() {
+            return Err(OffboardError::Other("expected EC2 P-256 key".into()));
+        }
+        let x = extract_label_bytes(&self.inner, -2)
+            .ok_or_else(|| OffboardError::Other("missing EC2 `x` coordinate".into()))?;
+        let y = extract_label_bytes(&self.inner, -3)
+            .ok_or_else(|| OffboardError::Other("missing EC2 `y` coordinate".into()))?;
+        if x.len() != 32 || y.len() != 32 {
+            return Err(OffboardError::Other(format!(
+                "EC2 coords must be 32 bytes each (got x={}, y={})",
+                x.len(),
+                y.len()
+            )));
+        }
+        Ok((x, y))
+    }
+}
+
+fn extract_label_bytes(key: &coset::CoseKey, label: i64) -> Option<Vec<u8>> {
+    for (l, v) in &key.params {
+        if let Label::Int(li) = l {
+            if *li == label {
+                if let ciborium::value::Value::Bytes(b) = v {
+                    return Some(b.clone());
+                }
+            }
+        }
+    }
+    None
 }
 
 /// Build a coset::CoseKey from a P-256 secret key.

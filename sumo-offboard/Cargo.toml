@@ -13,6 +13,7 @@ ciborium = "0.2"
 zstd = "0.13"
 rand = "0.8"
 pem = "3"
+sha2 = "0.10"
 thiserror = "2"
 p256 = { version = "0.13", features = ["ecdsa", "ecdh", "pem"] }
 ed25519-dalek = { version = "2", features = ["rand_core", "pem", "pkcs8"] }
@@ -20,3 +21,4 @@ getrandom = "0.2"
 
 [dev-dependencies]
 sumo-onboard = { path = "../sumo-onboard" }
+serde_yaml = "0.9"
