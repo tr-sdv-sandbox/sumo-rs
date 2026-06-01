@@ -20,7 +20,9 @@ pub struct ProcessorConfig {
 
 impl Default for ProcessorConfig {
     fn default() -> Self {
-        Self { soft_failure: false }
+        Self {
+            soft_failure: false,
+        }
     }
 }
 
@@ -140,8 +142,7 @@ impl<'a> SuitProcessor<'a> {
                 if let CommandValue::Parameters(params) = &item.value {
                     // Replace
                     for p in params {
-                        self.component_params[self.current_index]
-                            .insert(p.label, p.value.clone());
+                        self.component_params[self.current_index].insert(p.label, p.value.clone());
                     }
                 }
                 Ok(())
@@ -193,7 +194,10 @@ impl<'a> SuitProcessor<'a> {
                 self.do_invoke()
             }
             SUIT_DIRECTIVE_PROCESS_DEPENDENCY => {
-                info!(component = self.current_index, "directive: process dependency");
+                info!(
+                    component = self.current_index,
+                    "directive: process dependency"
+                );
                 self.do_process_dependency()
             }
 
@@ -253,12 +257,15 @@ impl<'a> SuitProcessor<'a> {
 
     fn do_process_dependency(&mut self) -> Result<(), Sum2Error> {
         let dep_idx = self.current_index;
-        let dep_uri = self.manifest.dependency_uri(dep_idx)
+        let dep_uri = self
+            .manifest
+            .dependency_uri(dep_idx)
             .ok_or(Sum2Error::DependencyFailed)?;
 
         // Fetch or extract L2 manifest
         let l2_bytes = if dep_uri.starts_with('#') {
-            self.manifest.integrated_payload(dep_uri)
+            self.manifest
+                .integrated_payload(dep_uri)
                 .ok_or(Sum2Error::DependencyFailed)?
                 .to_vec()
         } else {
@@ -268,7 +275,8 @@ impl<'a> SuitProcessor<'a> {
         };
 
         // Validate L2 manifest
-        let l2_manifest = self.validator
+        let l2_manifest = self
+            .validator
             .validate_envelope(&l2_bytes, self.crypto, 0)?;
 
         // Recursively process L2

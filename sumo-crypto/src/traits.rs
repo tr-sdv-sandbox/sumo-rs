@@ -30,11 +30,8 @@ pub trait CryptoBackend {
 
     fn sha256_streaming(&self) -> Box<dyn StreamingHash>;
 
-    fn ecdh_p256(
-        &self,
-        private_key: &[u8],
-        peer_public_key: &[u8],
-    ) -> Result<Vec<u8>, CryptoError>;
+    fn ecdh_p256(&self, private_key: &[u8], peer_public_key: &[u8])
+        -> Result<Vec<u8>, CryptoError>;
 
     fn hkdf_sha256(
         &self,

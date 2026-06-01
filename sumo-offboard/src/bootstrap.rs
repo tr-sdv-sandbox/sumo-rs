@@ -76,10 +76,7 @@ pub fn bootstrap_yaml_fragment(vm_id: &str, sha256_hex: &str) -> String {
 /// single fresh entry. Useful for first-time provisioning where the
 /// file doesn't exist yet.
 pub fn bootstrap_yaml_document(vm_id: &str, sha256_hex: &str) -> String {
-    format!(
-        "tokens:\n{}",
-        bootstrap_yaml_fragment(vm_id, sha256_hex),
-    )
+    format!("tokens:\n{}", bootstrap_yaml_fragment(vm_id, sha256_hex),)
 }
 
 fn hex_lower(bytes: &[u8]) -> String {
@@ -116,7 +113,10 @@ mod tests {
     fn sha256_matches_known_vector() {
         // SHA-256("") = e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
         let hex = token_sha256_hex(b"");
-        assert_eq!(hex, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+        assert_eq!(
+            hex,
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
     }
 
     #[test]
@@ -124,7 +124,9 @@ mod tests {
         let t = generate_token();
         let hex = token_sha256_hex(&t);
         assert_eq!(hex.len(), 64);
-        assert!(hex.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
+        assert!(hex
+            .chars()
+            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
     }
 
     #[test]

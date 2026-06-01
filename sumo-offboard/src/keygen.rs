@@ -1,6 +1,6 @@
 //! Key generation for signing and device keys.
 
-use crate::cose_key::{CoseKey, p256_secret_to_cose, ed25519_signing_to_cose};
+use crate::cose_key::{ed25519_signing_to_cose, p256_secret_to_cose, CoseKey};
 use crate::error::OffboardError;
 use coset::Label;
 
@@ -20,7 +20,9 @@ pub fn generate_signing_key(algorithm: i64) -> Result<CoseKey, OffboardError> {
             let sk = ed25519_dalek::SigningKey::generate(&mut rng);
             Ok(CoseKey::from_coset(ed25519_signing_to_cose(&sk)))
         }
-        _ => Err(OffboardError::Other(format!("unsupported algorithm: {algorithm}"))),
+        _ => Err(OffboardError::Other(format!(
+            "unsupported algorithm: {algorithm}"
+        ))),
     }
 }
 
@@ -35,7 +37,9 @@ pub fn generate_device_key(algorithm: i64) -> Result<CoseKey, OffboardError> {
             cose.alg = None;
             Ok(CoseKey::from_coset(cose))
         }
-        _ => Err(OffboardError::Other(format!("unsupported device key algorithm: {algorithm}"))),
+        _ => Err(OffboardError::Other(format!(
+            "unsupported device key algorithm: {algorithm}"
+        ))),
     }
 }
 
@@ -61,7 +65,8 @@ pub fn serialize_key_pem(key: &CoseKey, include_private: bool) -> Result<String,
                 let d = extract_param_bytes(inner, -4)?;
                 let sk = p256::SecretKey::from_bytes(d.as_slice().into())
                     .map_err(|e| OffboardError::Other(format!("invalid P-256 key: {e}")))?;
-                let pem_str = sk.to_pkcs8_pem(p256::pkcs8::LineEnding::LF)
+                let pem_str = sk
+                    .to_pkcs8_pem(p256::pkcs8::LineEnding::LF)
                     .map_err(|e| OffboardError::Other(format!("PEM encode failed: {e}")))?;
                 Ok(pem_str.to_string())
             } else {
@@ -75,7 +80,8 @@ pub fn serialize_key_pem(key: &CoseKey, include_private: bool) -> Result<String,
                 let pk = p256::PublicKey::from_sec1_bytes(&uncompressed)
                     .map_err(|e| OffboardError::Other(format!("invalid P-256 public key: {e}")))?;
                 use p256::pkcs8::EncodePublicKey;
-                let pem_str = pk.to_public_key_pem(p256::pkcs8::LineEnding::LF)
+                let pem_str = pk
+                    .to_public_key_pem(p256::pkcs8::LineEnding::LF)
                     .map_err(|e| OffboardError::Other(format!("PEM encode failed: {e}")))?;
                 Ok(pem_str)
             }
@@ -85,17 +91,23 @@ pub fn serialize_key_pem(key: &CoseKey, include_private: bool) -> Result<String,
             if include_private {
                 let d = extract_param_bytes(inner, -4)?;
                 let sk = ed25519_dalek::SigningKey::from_bytes(
-                    d.as_slice().try_into()
-                        .map_err(|_| OffboardError::Other("invalid Ed25519 key length".into()))?
+                    d.as_slice()
+                        .try_into()
+                        .map_err(|_| OffboardError::Other("invalid Ed25519 key length".into()))?,
                 );
-                let pem_str = sk.to_pkcs8_pem(p256::pkcs8::LineEnding::LF)
+                let pem_str = sk
+                    .to_pkcs8_pem(p256::pkcs8::LineEnding::LF)
                     .map_err(|e| OffboardError::Other(format!("PEM encode failed: {e}")))?;
                 Ok(pem_str.to_string())
             } else {
-                Err(OffboardError::Other("Ed25519 public-only PEM not supported".into()))
+                Err(OffboardError::Other(
+                    "Ed25519 public-only PEM not supported".into(),
+                ))
             }
         }
-        _ => Err(OffboardError::Other("unsupported key type for PEM export".into())),
+        _ => Err(OffboardError::Other(
+            "unsupported key type for PEM export".into(),
+        )),
     }
 }
 
@@ -107,5 +119,7 @@ fn extract_param_bytes(key: &coset::CoseKey, label: i64) -> Result<Vec<u8>, Offb
             }
         }
     }
-    Err(OffboardError::Other(format!("missing key parameter {label}")))
+    Err(OffboardError::Other(format!(
+        "missing key parameter {label}"
+    )))
 }

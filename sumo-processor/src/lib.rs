@@ -17,4 +17,4 @@
 
 mod processor;
 
-pub use processor::{SuitProcessor, ProcessorConfig};
+pub use processor::{ProcessorConfig, SuitProcessor};

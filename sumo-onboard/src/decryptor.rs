@@ -71,7 +71,8 @@ impl<'a> KeyUnwrap for InMemoryKeyUnwrap<'a> {
         wrapped_cek: &[u8],
         recipient_protected: &[u8],
     ) -> Result<Vec<u8>, Sum2Error> {
-        let dev_ec2 = cose_key::extract_ec2(self.device_key).map_err(|_| Sum2Error::DecryptFailed)?;
+        let dev_ec2 =
+            cose_key::extract_ec2(self.device_key).map_err(|_| Sum2Error::DecryptFailed)?;
         let dev_d = dev_ec2.d.ok_or(Sum2Error::DecryptFailed)?;
         sumo_crypto::ecdh_es::ecdh_es_a128kw_unwrap(
             self.crypto,
@@ -173,8 +174,7 @@ struct ParsedCoseEncrypt {
 fn parse_cose_encrypt(data: &[u8]) -> Result<ParsedCoseEncrypt, Sum2Error> {
     use ciborium::value::Value;
 
-    let value: Value =
-        ciborium::de::from_reader(data).map_err(|_| Sum2Error::DecryptFailed)?;
+    let value: Value = ciborium::de::from_reader(data).map_err(|_| Sum2Error::DecryptFailed)?;
 
     // May be tagged (tag 96) or untagged
     let arr = match &value {

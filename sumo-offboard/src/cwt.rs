@@ -152,10 +152,7 @@ pub fn mint_cwt(
             CborValue::Integer(Integer::from(CLAIM_CTI)),
             CborValue::Bytes(cti.to_vec()),
         ),
-        (
-            CborValue::Integer(Integer::from(CLAIM_CNF)),
-            cnf_wrapped,
-        ),
+        (CborValue::Integer(Integer::from(CLAIM_CNF)), cnf_wrapped),
     ]);
 
     let mut payload_bytes = Vec::new();
@@ -190,7 +187,10 @@ mod tests {
     }
 
     fn signer_pub(sk: &SigningKey) -> Vec<u8> {
-        sk.verifying_key().to_encoded_point(false).as_bytes().to_vec()
+        sk.verifying_key()
+            .to_encoded_point(false)
+            .as_bytes()
+            .to_vec()
     }
 
     #[test]
@@ -269,7 +269,7 @@ mod tests {
             &signer,
             "vm9",
             "device-test",
-            &[0u8; 31],  // wrong length
+            &[0u8; 31], // wrong length
             &[0u8; 32],
             ValidityWindow::from_now(0, 1),
         )

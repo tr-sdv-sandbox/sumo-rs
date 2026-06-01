@@ -41,9 +41,18 @@ impl CampaignBuilder {
         }
     }
 
-    pub fn sequence_number(mut self, seq: u64) -> Self { self.sequence_number = seq; self }
-    pub fn vendor_id(mut self, v: Uuid) -> Self { self.vendor_id = Some(v); self }
-    pub fn class_id(mut self, c: Uuid) -> Self { self.class_id = Some(c); self }
+    pub fn sequence_number(mut self, seq: u64) -> Self {
+        self.sequence_number = seq;
+        self
+    }
+    pub fn vendor_id(mut self, v: Uuid) -> Self {
+        self.vendor_id = Some(v);
+        self
+    }
+    pub fn class_id(mut self, c: Uuid) -> Self {
+        self.class_id = Some(c);
+        self
+    }
 
     /// Add an L2 image dependency fetched from a URI.
     pub fn add_image(mut self, fetch_uri: String, l2_envelope: &[u8]) -> Self {
@@ -70,7 +79,9 @@ impl CampaignBuilder {
         let crypto = sumo_crypto::RustCryptoBackend::new();
 
         if self.deps.is_empty() {
-            return Err(OffboardError::Other("campaign must have at least one dependency".into()));
+            return Err(OffboardError::Other(
+                "campaign must have at least one dependency".into(),
+            ));
         }
 
         // Build dependencies and component identifiers
@@ -194,13 +205,23 @@ impl CampaignBuilder {
             common: SuitCommon {
                 components,
                 dependencies,
-                shared_sequence: CommandSequence { items: shared_items },
+                shared_sequence: CommandSequence {
+                    items: shared_items,
+                },
             },
-            validate: Some(CommandSequence { items: validate_items }),
-            invoke: Some(CommandSequence { items: invoke_items }),
+            validate: Some(CommandSequence {
+                items: validate_items,
+            }),
+            invoke: Some(CommandSequence {
+                items: invoke_items,
+            }),
             severable: SeverableMembers {
-                dependency_resolution: Some(CommandSequence { items: dep_res_items }),
-                install: Some(CommandSequence { items: install_items }),
+                dependency_resolution: Some(CommandSequence {
+                    items: dep_res_items,
+                }),
+                install: Some(CommandSequence {
+                    items: install_items,
+                }),
                 payload_fetch: None,
                 text: None,
             },

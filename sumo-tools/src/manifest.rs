@@ -109,7 +109,6 @@ pub struct PayloadDescriptor {
     pub encrypt: Option<EncryptDescriptor>,
 
     // --- Reference mode fields (mutually exclusive with `file`) ---
-
     /// Pre-computed SHA-256 digest (hex string, 64 chars).
     #[serde(default)]
     pub digest: Option<String>,
@@ -206,7 +205,10 @@ metadata:
         assert_eq!(payload.encrypt.unwrap().device_keys.len(), 1);
 
         assert_eq!(desc.output.manifest, PathBuf::from("vm1-v1.1.0.suit"));
-        assert_eq!(desc.output.payload, Some(PathBuf::from("firmware/payload.bin")));
+        assert_eq!(
+            desc.output.payload,
+            Some(PathBuf::from("firmware/payload.bin"))
+        );
 
         let meta = desc.metadata.unwrap();
         assert_eq!(meta.version.as_deref(), Some("1.1.0"));
@@ -241,7 +243,10 @@ metadata:
         assert!(payload.file.is_none());
         assert!(payload.digest.is_some());
         assert_eq!(payload.size, Some(512000000));
-        assert_eq!(payload.encryption_info, Some(PathBuf::from("payload.bin.enc-info")));
+        assert_eq!(
+            payload.encryption_info,
+            Some(PathBuf::from("payload.bin.enc-info"))
+        );
 
         assert!(desc.output.payload.is_none());
     }
@@ -277,7 +282,10 @@ output:
   manifest: hsm-keys.suit
 "##;
         let desc: ManifestDescriptor = serde_yaml::from_str(yaml).unwrap();
-        assert_eq!(desc.component_id.as_ref().unwrap().to_vec(), vec!["hsm", "keys"]);
+        assert_eq!(
+            desc.component_id.as_ref().unwrap().to_vec(),
+            vec!["hsm", "keys"]
+        );
     }
 
     #[test]
@@ -334,8 +342,14 @@ metadata:
 "##;
         let desc: ManifestDescriptor = serde_yaml::from_str(yaml).unwrap();
         let meta = desc.metadata.unwrap();
-        assert_eq!(meta.vendor_id.as_deref(), Some("fa6b4a53d5ad5fdfbe9de4e97d85cd2b"));
-        assert_eq!(meta.class_id.as_deref(), Some("1492af1425695e48bf429b2d51f2ab45"));
+        assert_eq!(
+            meta.vendor_id.as_deref(),
+            Some("fa6b4a53d5ad5fdfbe9de4e97d85cd2b")
+        );
+        assert_eq!(
+            meta.class_id.as_deref(),
+            Some("1492af1425695e48bf429b2d51f2ab45")
+        );
     }
 
     #[test]

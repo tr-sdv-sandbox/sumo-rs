@@ -95,9 +95,7 @@ fn decode_auth_wrapper(data: &[u8]) -> Result<SuitAuthentication, CodecError> {
 
 // --- Manifest ---
 
-fn decode_manifest(
-    map: &[(Value, Value)],
-) -> Result<SuitManifest, CodecError> {
+fn decode_manifest(map: &[(Value, Value)]) -> Result<SuitManifest, CodecError> {
     let version = get_uint_from_map(map, SUIT_MANIFEST_VERSION)? as u32;
     if version != 1 {
         return Err(CodecError::UnsupportedVersion(version));
@@ -608,7 +606,9 @@ mod tests {
 
         // Install sequence: set-parameters with URI
         let install = env.manifest.severable.install.as_ref().unwrap();
-        let set_params_cmd = install.items.iter()
+        let set_params_cmd = install
+            .items
+            .iter()
             .find(|c| c.label == 19 || c.label == 20) // SET or OVERRIDE
             .unwrap();
         if let CommandValue::Parameters(ref params) = set_params_cmd.value {
@@ -633,17 +633,22 @@ mod tests {
 
         // Re-encode (using same signature)
         let sig = env.authentication.signatures[0].clone();
-        let encoded = crate::encode::encode_envelope(&env, |_manifest_bytes| {
-            Ok(sig.clone())
-        }).unwrap();
+        let encoded =
+            crate::encode::encode_envelope(&env, |_manifest_bytes| Ok(sig.clone())).unwrap();
 
         // Decode the re-encoded envelope
         let env2 = decode_envelope(&encoded).unwrap();
 
         // Verify structural equivalence
-        assert_eq!(env2.manifest.manifest_version, env.manifest.manifest_version);
+        assert_eq!(
+            env2.manifest.manifest_version,
+            env.manifest.manifest_version
+        );
         assert_eq!(env2.manifest.sequence_number, env.manifest.sequence_number);
-        assert_eq!(env2.manifest.common.components.len(), env.manifest.common.components.len());
+        assert_eq!(
+            env2.manifest.common.components.len(),
+            env.manifest.common.components.len()
+        );
         assert_eq!(
             env2.manifest.common.components[0].segments,
             env.manifest.common.components[0].segments

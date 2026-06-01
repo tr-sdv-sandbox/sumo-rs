@@ -148,7 +148,11 @@ impl Manifest {
     /// parameter associated with the given dependency index.
     pub fn dependency_uri(&self, dep_index: usize) -> Option<&str> {
         let sequences = [
-            self.envelope.manifest.severable.dependency_resolution.as_ref(),
+            self.envelope
+                .manifest
+                .severable
+                .dependency_resolution
+                .as_ref(),
             self.envelope.manifest.severable.install.as_ref(),
             Some(&self.envelope.manifest.common.shared_sequence),
         ];

@@ -35,8 +35,7 @@ fn build_kdf_context(protected: &[u8]) -> Result<Vec<u8>, CryptoError> {
     ]);
 
     let mut buf = Vec::new();
-    ciborium::ser::into_writer(&context, &mut buf)
-        .map_err(|_| CryptoError::KeyAgreementFailed)?;
+    ciborium::ser::into_writer(&context, &mut buf).map_err(|_| CryptoError::KeyAgreementFailed)?;
     Ok(buf)
 }
 

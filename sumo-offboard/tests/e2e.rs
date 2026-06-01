@@ -6,14 +6,14 @@ use std::collections::HashMap;
 
 use sumo_codec::types::Uuid;
 use sumo_crypto::{CryptoBackend, RustCryptoBackend};
+use sumo_offboard::campaign_builder::CampaignBuilder;
 use sumo_offboard::cose_key::CoseKey;
 use sumo_offboard::encryptor;
 use sumo_offboard::image_builder::ImageManifestBuilder;
-use sumo_offboard::campaign_builder::CampaignBuilder;
 use sumo_offboard::keygen;
 use sumo_offboard::recipient::Recipient;
-use sumo_onboard::decryptor::{InMemoryKeyUnwrap, StreamingDecryptor};
 use sumo_onboard::decompressor::StreamingDecompressor;
+use sumo_onboard::decryptor::{InMemoryKeyUnwrap, StreamingDecryptor};
 use sumo_onboard::error::Sum2Error;
 use sumo_onboard::orchestrator;
 use sumo_onboard::platform::{PlatformOps, StorageOps};
@@ -22,15 +22,21 @@ use sumo_onboard::validator::Validator;
 
 // --- Test constants ---
 
-const VENDOR_UUID: [u8; 16] = [0xFA, 0x6B, 0x4A, 0x53, 0xD5, 0xAD, 0x5F, 0xDF,
-                                 0xBE, 0x9D, 0xE6, 0x63, 0xE4, 0xD4, 0x1F, 0xFE];
-const CLASS_UUID: [u8; 16] =  [0x14, 0x92, 0xAF, 0x14, 0x25, 0x69, 0x5E, 0x48,
-                                 0xBF, 0x42, 0x9B, 0x2D, 0x51, 0xF2, 0xAB, 0x45];
+const VENDOR_UUID: [u8; 16] = [
+    0xFA, 0x6B, 0x4A, 0x53, 0xD5, 0xAD, 0x5F, 0xDF, 0xBE, 0x9D, 0xE6, 0x63, 0xE4, 0xD4, 0x1F, 0xFE,
+];
+const CLASS_UUID: [u8; 16] = [
+    0x14, 0x92, 0xAF, 0x14, 0x25, 0x69, 0x5E, 0x48, 0xBF, 0x42, 0x9B, 0x2D, 0x51, 0xF2, 0xAB, 0x45,
+];
 
 // --- Test helpers ---
 
-fn test_vendor() -> Uuid { Uuid(VENDOR_UUID) }
-fn test_class() -> Uuid { Uuid(CLASS_UUID) }
+fn test_vendor() -> Uuid {
+    Uuid(VENDOR_UUID)
+}
+fn test_class() -> Uuid {
+    Uuid(CLASS_UUID)
+}
 
 fn generate_a128kw_key(kid: &[u8]) -> CoseKey {
     let crypto = RustCryptoBackend::new();
@@ -130,7 +136,11 @@ impl FakePlatformOps {
     }
 
     fn get_written(&self, comp_id: &[u8]) -> Vec<u8> {
-        self.written.borrow().get(comp_id).cloned().unwrap_or_default()
+        self.written
+            .borrow()
+            .get(comp_id)
+            .cloned()
+            .unwrap_or_default()
     }
 }
 
@@ -162,7 +172,9 @@ impl PlatformOps for FakePlatformOps {
     }
 
     fn persist_sequence(&self, component_id: &[u8], seq: u64) -> Result<(), Sum2Error> {
-        self.persisted_seqs.borrow_mut().insert(component_id.to_vec(), seq);
+        self.persisted_seqs
+            .borrow_mut()
+            .insert(component_id.to_vec(), seq);
         Ok(())
     }
 }
@@ -183,14 +195,22 @@ impl FakeStorageOps {
 
 impl StorageOps for FakeStorageOps {
     fn read_u64(&self, key: &str) -> Result<u64, Sum2Error> {
-        self.u64s.borrow().get(key).copied().ok_or(Sum2Error::CallbackFailed)
+        self.u64s
+            .borrow()
+            .get(key)
+            .copied()
+            .ok_or(Sum2Error::CallbackFailed)
     }
     fn write_u64(&self, key: &str, value: u64) -> Result<(), Sum2Error> {
         self.u64s.borrow_mut().insert(key.to_string(), value);
         Ok(())
     }
     fn read_i64(&self, key: &str) -> Result<i64, Sum2Error> {
-        self.i64s.borrow().get(key).copied().ok_or(Sum2Error::CallbackFailed)
+        self.i64s
+            .borrow()
+            .get(key)
+            .copied()
+            .ok_or(Sum2Error::CallbackFailed)
     }
     fn write_i64(&self, key: &str, value: i64) -> Result<(), Sum2Error> {
         self.i64s.borrow_mut().insert(key.to_string(), value);
@@ -255,19 +275,26 @@ fn encrypt_build_validate_decrypt() {
     // Validate
     let trust_anchor = signing_key.public_key_bytes();
     let mut validator = Validator::new(&trust_anchor, None);
-    validator.add_device_key(&device_kek.to_cose_key_bytes()).unwrap();
+    validator
+        .add_device_key(&device_kek.to_cose_key_bytes())
+        .unwrap();
 
-    let manifest = validator.validate_envelope(&envelope_bytes, &crypto, 0).unwrap();
+    let manifest = validator
+        .validate_envelope(&envelope_bytes, &crypto, 0)
+        .unwrap();
     assert_eq!(manifest.sequence_number(), 42);
     assert_eq!(manifest.component_count(), 1);
 
     // Decrypt
     let device_key_coset = coset::CoseKey::from_slice(&device_kek.to_cose_key_bytes()).unwrap();
-    let unwrap = InMemoryKeyUnwrap::new(&device_key_coset, &crypto); let mut decryptor = StreamingDecryptor::new(&manifest, 0, &unwrap, &crypto).unwrap();
+    let unwrap = InMemoryKeyUnwrap::new(&device_key_coset, &crypto);
+    let mut decryptor = StreamingDecryptor::new(&manifest, 0, &unwrap, &crypto).unwrap();
 
     let mut plaintext = vec![0u8; ciphertext.len() + 256];
     let mut total = 0;
-    total += decryptor.update(&ciphertext, &mut plaintext[total..]).unwrap();
+    total += decryptor
+        .update(&ciphertext, &mut plaintext[total..])
+        .unwrap();
     total += decryptor.finalize(&mut plaintext[total..]).unwrap();
 
     assert_eq!(&plaintext[..total], firmware);
@@ -286,14 +313,18 @@ fn streaming_decrypt_small_chunks() {
         kid: b"device-1".to_vec(),
     }];
 
-    let (envelope_bytes, ciphertext) = build_test_image(&firmware, &signing_key, &recipients, false);
+    let (envelope_bytes, ciphertext) =
+        build_test_image(&firmware, &signing_key, &recipients, false);
 
     let trust_anchor = signing_key.public_key_bytes();
     let validator = Validator::new(&trust_anchor, None);
-    let manifest = validator.validate_envelope(&envelope_bytes, &crypto, 0).unwrap();
+    let manifest = validator
+        .validate_envelope(&envelope_bytes, &crypto, 0)
+        .unwrap();
 
     let device_key_coset = coset::CoseKey::from_slice(&device_kek.to_cose_key_bytes()).unwrap();
-    let unwrap = InMemoryKeyUnwrap::new(&device_key_coset, &crypto); let mut decryptor = StreamingDecryptor::new(&manifest, 0, &unwrap, &crypto).unwrap();
+    let unwrap = InMemoryKeyUnwrap::new(&device_key_coset, &crypto);
+    let mut decryptor = StreamingDecryptor::new(&manifest, 0, &unwrap, &crypto).unwrap();
 
     // Feed in 7-byte chunks (note: streaming impl accumulates, outputs all on finalize)
     let mut plaintext = Vec::new();
@@ -322,14 +353,18 @@ fn realistic_streaming_1mb() {
         kid: b"device-1".to_vec(),
     }];
 
-    let (envelope_bytes, ciphertext) = build_test_image(&firmware, &signing_key, &recipients, false);
+    let (envelope_bytes, ciphertext) =
+        build_test_image(&firmware, &signing_key, &recipients, false);
 
     let trust_anchor = signing_key.public_key_bytes();
     let validator = Validator::new(&trust_anchor, None);
-    let manifest = validator.validate_envelope(&envelope_bytes, &crypto, 0).unwrap();
+    let manifest = validator
+        .validate_envelope(&envelope_bytes, &crypto, 0)
+        .unwrap();
 
     let device_key_coset = coset::CoseKey::from_slice(&device_kek.to_cose_key_bytes()).unwrap();
-    let unwrap = InMemoryKeyUnwrap::new(&device_key_coset, &crypto); let mut decryptor = StreamingDecryptor::new(&manifest, 0, &unwrap, &crypto).unwrap();
+    let unwrap = InMemoryKeyUnwrap::new(&device_key_coset, &crypto);
+    let mut decryptor = StreamingDecryptor::new(&manifest, 0, &unwrap, &crypto).unwrap();
 
     // Stream in 4KB chunks
     let mut buf = vec![0u8; firmware.len() + 256];
@@ -383,11 +418,14 @@ fn compress_encrypt_decrypt_decompress() {
     // Validate
     let trust_anchor = signing_key.public_key_bytes();
     let validator = Validator::new(&trust_anchor, None);
-    let manifest = validator.validate_envelope(&envelope_bytes, &crypto, 0).unwrap();
+    let manifest = validator
+        .validate_envelope(&envelope_bytes, &crypto, 0)
+        .unwrap();
 
     // Decrypt
     let device_key_coset = coset::CoseKey::from_slice(&device_kek.to_cose_key_bytes()).unwrap();
-    let unwrap = InMemoryKeyUnwrap::new(&device_key_coset, &crypto); let mut decryptor = StreamingDecryptor::new(&manifest, 0, &unwrap, &crypto).unwrap();
+    let unwrap = InMemoryKeyUnwrap::new(&device_key_coset, &crypto);
+    let mut decryptor = StreamingDecryptor::new(&manifest, 0, &unwrap, &crypto).unwrap();
 
     let mut decrypted = Vec::new();
     let mut buf = vec![0u8; 4096 + 256];
@@ -421,24 +459,30 @@ fn ecdh_encrypt_decrypt() {
         kid: b"device-ecdh".to_vec(),
     }];
 
-    let (envelope_bytes, ciphertext) = build_test_image_ecdh(
-        firmware, &signing_key, &sender_key, &recipients,
-    );
+    let (envelope_bytes, ciphertext) =
+        build_test_image_ecdh(firmware, &signing_key, &sender_key, &recipients);
 
     // Validate
     let trust_anchor = signing_key.public_key_bytes();
     let mut validator = Validator::new(&trust_anchor, None);
-    validator.add_device_key(&device_key.to_cose_key_bytes()).unwrap();
+    validator
+        .add_device_key(&device_key.to_cose_key_bytes())
+        .unwrap();
 
-    let manifest = validator.validate_envelope(&envelope_bytes, &crypto, 0).unwrap();
+    let manifest = validator
+        .validate_envelope(&envelope_bytes, &crypto, 0)
+        .unwrap();
 
     // Decrypt with device private key
     let device_key_coset = coset::CoseKey::from_slice(&device_key.to_cose_key_bytes()).unwrap();
-    let unwrap = InMemoryKeyUnwrap::new(&device_key_coset, &crypto); let mut decryptor = StreamingDecryptor::new(&manifest, 0, &unwrap, &crypto).unwrap();
+    let unwrap = InMemoryKeyUnwrap::new(&device_key_coset, &crypto);
+    let mut decryptor = StreamingDecryptor::new(&manifest, 0, &unwrap, &crypto).unwrap();
 
     let mut plaintext = vec![0u8; ciphertext.len() + 256];
     let mut total = 0;
-    total += decryptor.update(&ciphertext, &mut plaintext[total..]).unwrap();
+    total += decryptor
+        .update(&ciphertext, &mut plaintext[total..])
+        .unwrap();
     total += decryptor.finalize(&mut plaintext[total..]).unwrap();
 
     assert_eq!(&plaintext[..total], firmware);
@@ -505,7 +549,9 @@ fn policy_load_save_roundtrip() {
 
     let trust_anchor = signing_key.public_key_bytes();
     let validator = Validator::new(&trust_anchor, None);
-    let manifest = validator.validate_envelope(&envelope_bytes, &crypto, 0).unwrap();
+    let manifest = validator
+        .validate_envelope(&envelope_bytes, &crypto, 0)
+        .unwrap();
 
     // Save policy
     let storage = FakeStorageOps::new();
@@ -547,9 +593,13 @@ fn process_image_a128kw() {
 
     let trust_anchor = signing_key.public_key_bytes();
     let mut validator = Validator::new(&trust_anchor, None);
-    validator.add_device_key(&device_kek.to_cose_key_bytes()).unwrap();
+    validator
+        .add_device_key(&device_kek.to_cose_key_bytes())
+        .unwrap();
 
-    let manifest = validator.validate_envelope(&envelope_bytes, &crypto, 0).unwrap();
+    let manifest = validator
+        .validate_envelope(&envelope_bytes, &crypto, 0)
+        .unwrap();
 
     let ops = FakePlatformOps::new();
     ops.add_fetch("https://fw.example.com/ecu-a.enc", ciphertext);
@@ -573,15 +623,18 @@ fn process_image_ecdh() {
         kid: b"device-ecdh".to_vec(),
     }];
 
-    let (envelope_bytes, ciphertext) = build_test_image_ecdh(
-        firmware, &signing_key, &sender_key, &recipients,
-    );
+    let (envelope_bytes, ciphertext) =
+        build_test_image_ecdh(firmware, &signing_key, &sender_key, &recipients);
 
     let trust_anchor = signing_key.public_key_bytes();
     let mut validator = Validator::new(&trust_anchor, None);
-    validator.add_device_key(&device_key.to_cose_key_bytes()).unwrap();
+    validator
+        .add_device_key(&device_key.to_cose_key_bytes())
+        .unwrap();
 
-    let manifest = validator.validate_envelope(&envelope_bytes, &crypto, 0).unwrap();
+    let manifest = validator
+        .validate_envelope(&envelope_bytes, &crypto, 0)
+        .unwrap();
 
     let ops = FakePlatformOps::new();
     ops.add_fetch("https://fw.example.com/ecu-a.enc", ciphertext);
@@ -639,12 +692,20 @@ fn process_campaign_two_images() {
     let fw_b = b"firmware for ECU-B v3.1";
 
     let (l2_a, ct_a) = build_l2_image(
-        fw_a, vec!["ecu-a".into(), "firmware".into()],
-        "https://fw.example.com/ecu-a.enc", 100, &signing_key, &device_kek,
+        fw_a,
+        vec!["ecu-a".into(), "firmware".into()],
+        "https://fw.example.com/ecu-a.enc",
+        100,
+        &signing_key,
+        &device_kek,
     );
     let (l2_b, ct_b) = build_l2_image(
-        fw_b, vec!["ecu-b".into(), "firmware".into()],
-        "https://fw.example.com/ecu-b.enc", 100, &signing_key, &device_kek,
+        fw_b,
+        vec!["ecu-b".into(), "firmware".into()],
+        "https://fw.example.com/ecu-b.enc",
+        100,
+        &signing_key,
+        &device_kek,
     );
 
     // Build campaign
@@ -660,7 +721,9 @@ fn process_campaign_two_images() {
     // Set up validator and platform
     let trust_anchor = signing_key.public_key_bytes();
     let mut validator = Validator::new(&trust_anchor, None);
-    validator.add_device_key(&device_kek.to_cose_key_bytes()).unwrap();
+    validator
+        .add_device_key(&device_kek.to_cose_key_bytes())
+        .unwrap();
 
     let manifest = validator.validate_envelope(&campaign, &crypto, 0).unwrap();
     assert!(manifest.is_campaign());
@@ -687,8 +750,12 @@ fn process_campaign_integrated_payloads() {
     let fw = b"integrated firmware payload";
 
     let (l2_env, ciphertext) = build_l2_image(
-        fw, vec!["ecu-a".into(), "firmware".into()],
-        "https://fw.example.com/ecu-a.enc", 100, &signing_key, &device_kek,
+        fw,
+        vec!["ecu-a".into(), "firmware".into()],
+        "https://fw.example.com/ecu-a.enc",
+        100,
+        &signing_key,
+        &device_kek,
     );
 
     // Build campaign with integrated L2 manifest
@@ -702,7 +769,9 @@ fn process_campaign_integrated_payloads() {
 
     let trust_anchor = signing_key.public_key_bytes();
     let mut validator = Validator::new(&trust_anchor, None);
-    validator.add_device_key(&device_kek.to_cose_key_bytes()).unwrap();
+    validator
+        .add_device_key(&device_kek.to_cose_key_bytes())
+        .unwrap();
 
     let manifest = validator.validate_envelope(&campaign, &crypto, 0).unwrap();
     assert!(manifest.is_campaign());
@@ -730,7 +799,8 @@ fn process_image_with_compression() {
     let firmware: Vec<u8> = (0..16384u32).map(|i| (i % 7) as u8).collect();
 
     let (envelope_bytes, ciphertext) = build_test_image(
-        &firmware, &signing_key,
+        &firmware,
+        &signing_key,
         &[Recipient {
             public_key: CoseKey::from_cose_key_bytes(&device_kek.to_cose_key_bytes()).unwrap(),
             kid: b"device-1".to_vec(),
@@ -740,9 +810,13 @@ fn process_image_with_compression() {
 
     let trust_anchor = signing_key.public_key_bytes();
     let mut validator = Validator::new(&trust_anchor, None);
-    validator.add_device_key(&device_kek.to_cose_key_bytes()).unwrap();
+    validator
+        .add_device_key(&device_kek.to_cose_key_bytes())
+        .unwrap();
 
-    let manifest = validator.validate_envelope(&envelope_bytes, &crypto, 0).unwrap();
+    let manifest = validator
+        .validate_envelope(&envelope_bytes, &crypto, 0)
+        .unwrap();
 
     let ops = FakePlatformOps::new();
     ops.add_fetch("https://fw.example.com/ecu-a.enc", ciphertext);
@@ -769,13 +843,18 @@ fn process_image_fetch_fails() {
         kid: b"device-1".to_vec(),
     }];
 
-    let (envelope_bytes, _ciphertext) = build_test_image(firmware, &signing_key, &recipients, false);
+    let (envelope_bytes, _ciphertext) =
+        build_test_image(firmware, &signing_key, &recipients, false);
 
     let trust_anchor = signing_key.public_key_bytes();
     let mut validator = Validator::new(&trust_anchor, None);
-    validator.add_device_key(&device_kek.to_cose_key_bytes()).unwrap();
+    validator
+        .add_device_key(&device_kek.to_cose_key_bytes())
+        .unwrap();
 
-    let manifest = validator.validate_envelope(&envelope_bytes, &crypto, 0).unwrap();
+    let manifest = validator
+        .validate_envelope(&envelope_bytes, &crypto, 0)
+        .unwrap();
 
     // Don't add fetch data — fetch should fail
     let ops = FakePlatformOps::new();
@@ -797,7 +876,8 @@ fn process_image_tampered_payload() {
         kid: b"device-1".to_vec(),
     }];
 
-    let (envelope_bytes, mut ciphertext) = build_test_image(firmware, &signing_key, &recipients, false);
+    let (envelope_bytes, mut ciphertext) =
+        build_test_image(firmware, &signing_key, &recipients, false);
 
     // Tamper with the ciphertext (flip a byte early in the payload, before GCM tag)
     if ciphertext.len() > 5 {
@@ -806,9 +886,13 @@ fn process_image_tampered_payload() {
 
     let trust_anchor = signing_key.public_key_bytes();
     let mut validator = Validator::new(&trust_anchor, None);
-    validator.add_device_key(&device_kek.to_cose_key_bytes()).unwrap();
+    validator
+        .add_device_key(&device_kek.to_cose_key_bytes())
+        .unwrap();
 
-    let manifest = validator.validate_envelope(&envelope_bytes, &crypto, 0).unwrap();
+    let manifest = validator
+        .validate_envelope(&envelope_bytes, &crypto, 0)
+        .unwrap();
 
     let ops = FakePlatformOps::new();
     ops.add_fetch("https://fw.example.com/ecu-a.enc", ciphertext);
@@ -836,7 +920,9 @@ fn process_image_no_device_key() {
     // No device key added to validator
     let validator = Validator::new(&trust_anchor, None);
 
-    let manifest = validator.validate_envelope(&envelope_bytes, &crypto, 0).unwrap();
+    let manifest = validator
+        .validate_envelope(&envelope_bytes, &crypto, 0)
+        .unwrap();
 
     let ops = FakePlatformOps::new();
     ops.add_fetch("https://fw.example.com/ecu-a.enc", ciphertext);
@@ -865,8 +951,12 @@ fn process_campaign_fetch_l2_fails() {
 
     let fw = b"firmware data";
     let (l2_env, _ct) = build_l2_image(
-        fw, vec!["ecu-a".into(), "firmware".into()],
-        "https://fw.example.com/ecu-a.enc", 100, &signing_key, &device_kek,
+        fw,
+        vec!["ecu-a".into(), "firmware".into()],
+        "https://fw.example.com/ecu-a.enc",
+        100,
+        &signing_key,
+        &device_kek,
     );
 
     let campaign = CampaignBuilder::new()
@@ -878,7 +968,9 @@ fn process_campaign_fetch_l2_fails() {
 
     let trust_anchor = signing_key.public_key_bytes();
     let mut validator = Validator::new(&trust_anchor, None);
-    validator.add_device_key(&device_kek.to_cose_key_bytes()).unwrap();
+    validator
+        .add_device_key(&device_kek.to_cose_key_bytes())
+        .unwrap();
 
     let manifest = validator.validate_envelope(&campaign, &crypto, 0).unwrap();
 
@@ -909,9 +1001,13 @@ fn eddsa_sign_validate_roundtrip() {
 
     let trust_anchor = signing_key.public_key_bytes();
     let mut validator = Validator::new(&trust_anchor, None);
-    validator.add_device_key(&device_kek.to_cose_key_bytes()).unwrap();
+    validator
+        .add_device_key(&device_kek.to_cose_key_bytes())
+        .unwrap();
 
-    let manifest = validator.validate_envelope(&envelope_bytes, &crypto, 0).unwrap();
+    let manifest = validator
+        .validate_envelope(&envelope_bytes, &crypto, 0)
+        .unwrap();
     assert_eq!(manifest.sequence_number(), 42);
 
     // Decrypt and verify
@@ -973,9 +1069,15 @@ fn text_fields_roundtrip() {
 
     assert_eq!(manifest.text_vendor_name(0), Some("Acme Corp"));
     assert_eq!(manifest.text_model_name(0), Some("ECU-A Linux"));
-    assert_eq!(manifest.text_model_info(0), Some("Test build for A/B validation"));
+    assert_eq!(
+        manifest.text_model_info(0),
+        Some("Test build for A/B validation")
+    );
     assert_eq!(manifest.text_version(0), Some("1.2.3"));
-    assert_eq!(manifest.text_description(), Some("Quarterly security update"));
+    assert_eq!(
+        manifest.text_description(),
+        Some("Quarterly security update")
+    );
 }
 
 #[test]

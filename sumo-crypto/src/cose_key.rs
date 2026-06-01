@@ -3,8 +3,8 @@
 //! Supports EC2 (P-256) and OKP (Ed25519/X25519) key types.
 
 use crate::error::CryptoError;
-use coset::CborSerializable;
 use coset::iana::EnumI64;
+use coset::CborSerializable;
 
 // COSE_Key map labels
 pub const COSE_KEY_KTY: i64 = 1;
@@ -42,7 +42,7 @@ pub struct Ec2Key {
 /// Parsed OKP (Ed25519/X25519) key components.
 pub struct OkpKey {
     pub crv: i64,
-    pub x: Vec<u8>, // public key bytes
+    pub x: Vec<u8>,         // public key bytes
     pub d: Option<Vec<u8>>, // private key bytes
 }
 

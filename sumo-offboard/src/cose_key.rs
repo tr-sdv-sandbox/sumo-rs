@@ -1,7 +1,7 @@
 //! COSE key management with import/export.
 
-use coset::{iana, CborSerializable, Label};
 use crate::error::OffboardError;
+use coset::{iana, CborSerializable, Label};
 
 /// A COSE key with optional private material.
 pub struct CoseKey {
@@ -87,7 +87,10 @@ impl CoseKey {
 
     /// Returns true if this is a symmetric key (e.g., A128KW).
     pub fn is_symmetric(&self) -> bool {
-        matches!(self.inner.kty, coset::KeyType::Assigned(iana::KeyType::Symmetric))
+        matches!(
+            self.inner.kty,
+            coset::KeyType::Assigned(iana::KeyType::Symmetric)
+        )
     }
 
     /// Access the inner coset key.
@@ -106,9 +109,8 @@ impl CoseKey {
         }
         let d = extract_label_bytes(&self.inner, -4)
             .ok_or_else(|| OffboardError::Other("missing private scalar `d`".into()))?;
-        p256::ecdsa::SigningKey::from_bytes(d.as_slice().into()).map_err(|e| {
-            OffboardError::Other(format!("invalid P-256 signing key bytes: {e}"))
-        })
+        p256::ecdsa::SigningKey::from_bytes(d.as_slice().into())
+            .map_err(|e| OffboardError::Other(format!("invalid P-256 signing key bytes: {e}")))
     }
 
     /// Extract the EC2 / P-256 public coordinates `(x, y)`. Each
@@ -179,8 +181,17 @@ pub(crate) fn ed25519_signing_to_cose(sk: &ed25519_dalek::SigningKey) -> coset::
 
     coset::CoseKeyBuilder::new_okp_key()
         .algorithm(iana::Algorithm::EdDSA)
-        .param(iana::OkpKeyParameter::Crv as i64, ciborium::value::Value::from(iana::EllipticCurve::Ed25519 as i64))
-        .param(iana::OkpKeyParameter::X as i64, ciborium::value::Value::Bytes(x))
-        .param(iana::OkpKeyParameter::D as i64, ciborium::value::Value::Bytes(d))
+        .param(
+            iana::OkpKeyParameter::Crv as i64,
+            ciborium::value::Value::from(iana::EllipticCurve::Ed25519 as i64),
+        )
+        .param(
+            iana::OkpKeyParameter::X as i64,
+            ciborium::value::Value::Bytes(x),
+        )
+        .param(
+            iana::OkpKeyParameter::D as i64,
+            ciborium::value::Value::Bytes(d),
+        )
         .build()
 }

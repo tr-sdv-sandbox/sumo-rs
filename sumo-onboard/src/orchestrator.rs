@@ -1,7 +1,7 @@
 //! Two-level manifest orchestration (campaign → image).
 
-use crate::decryptor::StreamingDecryptor;
 use crate::decompressor::StreamingDecompressor;
+use crate::decryptor::StreamingDecryptor;
 use crate::error::Sum2Error;
 use crate::manifest::Manifest;
 use crate::platform::PlatformOps;
@@ -23,11 +23,18 @@ pub fn process_image(
     let comp_id_bytes = encode_component_id(comp_segments);
 
     let uri = manifest.uri(0).ok_or(Sum2Error::InvalidEnvelope)?;
-    let expected_digest = manifest.image_digest(0).ok_or(Sum2Error::InvalidEnvelope)?.0;
+    let expected_digest = manifest
+        .image_digest(0)
+        .ok_or(Sum2Error::InvalidEnvelope)?
+        .0;
 
     // Fetch the payload
     let expected_size = manifest.image_size(0).unwrap_or(0) as usize;
-    let alloc_size = if expected_size > 0 { expected_size + 1024 } else { 256 * 1024 };
+    let alloc_size = if expected_size > 0 {
+        expected_size + 1024
+    } else {
+        256 * 1024
+    };
     let mut fetch_buf = vec![0u8; alloc_size];
     let fetched = ops.fetch(uri, &mut fetch_buf)?;
     let payload = &fetch_buf[..fetched];
@@ -148,12 +155,14 @@ pub fn process_campaign(
     let dep_count = manifest.dependency_count();
     for dep_idx in 0..dep_count {
         // Get URI for this dependency from dependency_resolution or install sequence
-        let dep_uri = manifest.dependency_uri(dep_idx)
+        let dep_uri = manifest
+            .dependency_uri(dep_idx)
             .ok_or(Sum2Error::DependencyFailed)?;
 
         let l2_bytes = if dep_uri.starts_with('#') {
             // Integrated payload
-            manifest.integrated_payload(dep_uri)
+            manifest
+                .integrated_payload(dep_uri)
                 .ok_or(Sum2Error::DependencyFailed)?
                 .to_vec()
         } else {

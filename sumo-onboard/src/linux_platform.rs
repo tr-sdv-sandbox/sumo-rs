@@ -103,8 +103,7 @@ impl PlatformOps for LinuxPlatformOps {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).map_err(|_| Sum2Error::CallbackFailed)?;
         }
-        fs::write(&path, seq.to_string().as_bytes())
-            .map_err(|_| Sum2Error::CallbackFailed)
+        fs::write(&path, seq.to_string().as_bytes()).map_err(|_| Sum2Error::CallbackFailed)
     }
 }
 
@@ -137,10 +136,7 @@ impl LinuxStorageOps {
         if let Some(parent) = self.path.parent() {
             fs::create_dir_all(parent).map_err(|_| Sum2Error::CallbackFailed)?;
         }
-        let content: String = map
-            .iter()
-            .map(|(k, v)| format!("{k}={v}\n"))
-            .collect();
+        let content: String = map.iter().map(|(k, v)| format!("{k}={v}\n")).collect();
         fs::write(&self.path, content).map_err(|_| Sum2Error::CallbackFailed)
     }
 }

@@ -32,12 +32,8 @@ impl CryptoBackend for RustCryptoBackend {
     ) -> Result<(), CryptoError> {
         let alg = cose_key::key_algorithm(key);
         match alg {
-            Some(cose_key::COSE_ALG_ES256) => {
-                verify_es256(key, protected, payload, signature)
-            }
-            Some(cose_key::COSE_ALG_EDDSA) => {
-                verify_eddsa(key, protected, payload, signature)
-            }
+            Some(cose_key::COSE_ALG_ES256) => verify_es256(key, protected, payload, signature),
+            Some(cose_key::COSE_ALG_EDDSA) => verify_eddsa(key, protected, payload, signature),
             _ => Err(CryptoError::UnsupportedAlgorithm),
         }
     }
@@ -74,20 +70,18 @@ impl CryptoBackend for RustCryptoBackend {
         use p256::elliptic_curve::sec1::FromEncodedPoint;
 
         // Parse private key (32 bytes scalar)
-        let secret = p256::SecretKey::from_bytes(private_key.into())
-            .map_err(|_| CryptoError::InvalidKey)?;
+        let secret =
+            p256::SecretKey::from_bytes(private_key.into()).map_err(|_| CryptoError::InvalidKey)?;
 
         // Parse peer public key (uncompressed point: 04 || x || y, or just x || y)
         let peer_point = if peer_public_key.len() == 65 && peer_public_key[0] == 0x04 {
-            p256::EncodedPoint::from_bytes(peer_public_key)
-                .map_err(|_| CryptoError::InvalidKey)?
+            p256::EncodedPoint::from_bytes(peer_public_key).map_err(|_| CryptoError::InvalidKey)?
         } else if peer_public_key.len() == 64 {
             // x || y format — prepend 04
             let mut uncompressed = [0u8; 65];
             uncompressed[0] = 0x04;
             uncompressed[1..].copy_from_slice(peer_public_key);
-            p256::EncodedPoint::from_bytes(&uncompressed)
-                .map_err(|_| CryptoError::InvalidKey)?
+            p256::EncodedPoint::from_bytes(&uncompressed).map_err(|_| CryptoError::InvalidKey)?
         } else {
             return Err(CryptoError::InvalidKey);
         };
@@ -97,10 +91,8 @@ impl CryptoBackend for RustCryptoBackend {
             .ok_or(CryptoError::InvalidKey)?;
 
         // Perform ECDH
-        let shared_secret = p256::ecdh::diffie_hellman(
-            secret.to_nonzero_scalar(),
-            peer_public.as_affine(),
-        );
+        let shared_secret =
+            p256::ecdh::diffie_hellman(secret.to_nonzero_scalar(), peer_public.as_affine());
 
         Ok(shared_secret.raw_secret_bytes().to_vec())
     }
@@ -168,13 +160,14 @@ impl CryptoBackend for RustCryptoBackend {
         aad: &[u8],
         plaintext: &[u8],
     ) -> Result<Vec<u8>, CryptoError> {
-        use aes_gcm::{Aes128Gcm, KeyInit, AeadInPlace, Nonce};
+        use aes_gcm::{AeadInPlace, Aes128Gcm, KeyInit, Nonce};
 
         let cipher = Aes128Gcm::new(key.into());
         let nonce = Nonce::from_slice(iv);
 
         let mut buffer = plaintext.to_vec();
-        let tag = cipher.encrypt_in_place_detached(nonce, aad, &mut buffer)
+        let tag = cipher
+            .encrypt_in_place_detached(nonce, aad, &mut buffer)
             .map_err(|_| CryptoError::EncryptionFailed)?;
 
         buffer.extend_from_slice(&tag);
@@ -209,7 +202,7 @@ fn verify_es256(
     payload: &[u8],
     signature: &[u8],
 ) -> Result<(), CryptoError> {
-    use p256::ecdsa::{Signature, VerifyingKey, signature::Verifier};
+    use p256::ecdsa::{signature::Verifier, Signature, VerifyingKey};
 
     let ec2 = cose_key::extract_ec2(key)?;
 
@@ -219,8 +212,7 @@ fn verify_es256(
     point[1..33].copy_from_slice(&ec2.x);
     point[33..65].copy_from_slice(&ec2.y);
 
-    let vk = VerifyingKey::from_sec1_bytes(&point)
-        .map_err(|_| CryptoError::InvalidKey)?;
+    let vk = VerifyingKey::from_sec1_bytes(&point).map_err(|_| CryptoError::InvalidKey)?;
 
     // ES256 signature is r || s (32 + 32 = 64 bytes)
     let sig = Signature::from_bytes(signature.into())
@@ -237,13 +229,12 @@ fn sign_es256(
     protected: &[u8],
     payload: &[u8],
 ) -> Result<Vec<u8>, CryptoError> {
-    use p256::ecdsa::{SigningKey, signature::Signer};
+    use p256::ecdsa::{signature::Signer, SigningKey};
 
     let ec2 = cose_key::extract_ec2(key)?;
     let d = ec2.d.ok_or(CryptoError::InvalidKey)?;
 
-    let sk = SigningKey::from_bytes(&d.into())
-        .map_err(|_| CryptoError::InvalidKey)?;
+    let sk = SigningKey::from_bytes(&d.into()).map_err(|_| CryptoError::InvalidKey)?;
 
     let tbs = build_sig_structure(protected, payload);
     let sig: p256::ecdsa::Signature = sk.sign(&tbs);
@@ -260,20 +251,25 @@ fn verify_eddsa(
     payload: &[u8],
     signature: &[u8],
 ) -> Result<(), CryptoError> {
-    use ed25519_dalek::{VerifyingKey as EdVerifyingKey, Signature as EdSignature, Verifier};
+    use ed25519_dalek::{Signature as EdSignature, Verifier, VerifyingKey as EdVerifyingKey};
 
     let okp = cose_key::extract_okp(key)?;
     if okp.x.len() != 32 {
         return Err(CryptoError::InvalidKey);
     }
 
-    let pub_bytes: [u8; 32] = okp.x.as_slice().try_into()
+    let pub_bytes: [u8; 32] = okp
+        .x
+        .as_slice()
+        .try_into()
         .map_err(|_| CryptoError::InvalidKey)?;
-    let vk = EdVerifyingKey::from_bytes(&pub_bytes)
-        .map_err(|_| CryptoError::InvalidKey)?;
+    let vk = EdVerifyingKey::from_bytes(&pub_bytes).map_err(|_| CryptoError::InvalidKey)?;
 
-    let sig = EdSignature::from_bytes(signature.try_into()
-        .map_err(|_| CryptoError::SignatureVerificationFailed)?);
+    let sig = EdSignature::from_bytes(
+        signature
+            .try_into()
+            .map_err(|_| CryptoError::SignatureVerificationFailed)?,
+    );
 
     let tbs = build_sig_structure(protected, payload);
     vk.verify(&tbs, &sig)
@@ -285,7 +281,7 @@ fn sign_eddsa(
     protected: &[u8],
     payload: &[u8],
 ) -> Result<Vec<u8>, CryptoError> {
-    use ed25519_dalek::{SigningKey as EdSigningKey, Signer};
+    use ed25519_dalek::{Signer, SigningKey as EdSigningKey};
 
     let okp = cose_key::extract_okp(key)?;
     let d = okp.d.ok_or(CryptoError::InvalidKey)?;
@@ -293,7 +289,9 @@ fn sign_eddsa(
         return Err(CryptoError::InvalidKey);
     }
 
-    let sk_bytes: [u8; 32] = d.as_slice().try_into()
+    let sk_bytes: [u8; 32] = d
+        .as_slice()
+        .try_into()
         .map_err(|_| CryptoError::InvalidKey)?;
     let sk = EdSigningKey::from_bytes(&sk_bytes);
 

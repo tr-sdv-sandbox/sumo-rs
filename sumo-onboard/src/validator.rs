@@ -180,10 +180,9 @@ impl Validator {
                     None => &detached_payload,
                 };
 
-                let verify_result = crypto
-                    .verify_sign1(anchor, protected_bytes, payload, &sign1.signature);
-                if verify_result.is_ok()
-                {
+                let verify_result =
+                    crypto.verify_sign1(anchor, protected_bytes, payload, &sign1.signature);
+                if verify_result.is_ok() {
                     // Check revocation for this key
                     if !anchor.key_id.is_empty()
                         && self.revoked_kids.iter().any(|k| k == &anchor.key_id)

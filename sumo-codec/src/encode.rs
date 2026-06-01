@@ -15,10 +15,7 @@ use crate::types::{DigestAlgorithm, DigestInfo, VersionMatch};
 ///
 /// The `sign_fn` callback receives the serialized manifest CBOR and must return
 /// a COSE_Sign1 signature (raw CBOR bytes).
-pub fn encode_envelope<F>(
-    envelope: &SuitEnvelope,
-    sign_fn: F,
-) -> Result<Vec<u8>, CodecError>
+pub fn encode_envelope<F>(envelope: &SuitEnvelope, sign_fn: F) -> Result<Vec<u8>, CodecError>
 where
     F: FnOnce(&[u8]) -> Result<Vec<u8>, CodecError>,
 {
@@ -31,17 +28,17 @@ where
 
     // 4. Build authentication wrapper: [ bstr(digest), bstr(signature) ]
     let digest_cbor = encode_digest(&envelope.authentication.digest)?;
-    let auth_array = Value::Array(vec![
-        Value::Bytes(digest_cbor),
-        Value::Bytes(signature),
-    ]);
+    let auth_array = Value::Array(vec![Value::Bytes(digest_cbor), Value::Bytes(signature)]);
     let auth_bytes = cbor_serialize(&auth_array)?;
 
     // 5. Build envelope map
     let mut entries: Vec<(Value, Value)> = Vec::new();
 
     // Key 2: authentication wrapper
-    entries.push((int_key(SUIT_AUTHENTICATION_WRAPPER), Value::Bytes(auth_bytes)));
+    entries.push((
+        int_key(SUIT_AUTHENTICATION_WRAPPER),
+        Value::Bytes(auth_bytes),
+    ));
 
     // Key 3: manifest
     entries.push((int_key(SUIT_MANIFEST), Value::Bytes(manifest_bytes)));
@@ -67,10 +64,16 @@ pub fn encode_manifest(manifest: &SuitManifest) -> Result<Vec<u8>, CodecError> {
     let mut entries: Vec<(Value, Value)> = Vec::new();
 
     // Key 1: manifest version
-    entries.push((int_key(SUIT_MANIFEST_VERSION), Value::Integer(Integer::from(manifest.manifest_version as i64))));
+    entries.push((
+        int_key(SUIT_MANIFEST_VERSION),
+        Value::Integer(Integer::from(manifest.manifest_version as i64)),
+    ));
 
     // Key 2: sequence number
-    entries.push((int_key(SUIT_MANIFEST_SEQUENCE_NUMBER), Value::Integer(Integer::from(manifest.sequence_number as i64))));
+    entries.push((
+        int_key(SUIT_MANIFEST_SEQUENCE_NUMBER),
+        Value::Integer(Integer::from(manifest.sequence_number as i64)),
+    ));
 
     // Key 3: common (bstr-wrapped)
     let common_bytes = encode_common(&manifest.common)?;
@@ -147,9 +150,7 @@ fn encode_common(common: &SuitCommon) -> Result<Vec<u8>, CodecError> {
         let comps: Vec<Value> = common
             .components
             .iter()
-            .map(|c| {
-                Value::Array(c.segments.iter().map(|s| Value::Bytes(s.clone())).collect())
-            })
+            .map(|c| Value::Array(c.segments.iter().map(|s| Value::Bytes(s.clone())).collect()))
             .collect();
         entries.push((int_key(SUIT_COMPONENTS), Value::Array(comps)));
     }
@@ -220,9 +221,7 @@ fn encode_parameter_value(value: &ParameterValue) -> Result<Value, CodecError> {
             let cbor = encode_digest(digest)?;
             Ok(Value::Bytes(cbor))
         }
-        ParameterValue::ImageSize(size) => {
-            Ok(Value::Integer(Integer::from(*size as i64)))
-        }
+        ParameterValue::ImageSize(size) => Ok(Value::Integer(Integer::from(*size as i64))),
         ParameterValue::Uri(uri) => Ok(Value::Text(uri.clone())),
         ParameterValue::EncryptionInfo(info) => Ok(Value::Bytes(info.clone())),
         ParameterValue::Version(vm) => {
@@ -260,7 +259,11 @@ fn encode_version_match(vm: &VersionMatch) -> Result<Vec<u8>, CodecError> {
         VersionComparison::LesserEqual => 4,
         VersionComparison::Lesser => 5,
     };
-    let parts: Vec<Value> = vm.parts.iter().map(|p| Value::Integer(Integer::from(*p))).collect();
+    let parts: Vec<Value> = vm
+        .parts
+        .iter()
+        .map(|p| Value::Integer(Integer::from(*p)))
+        .collect();
     let arr = Value::Array(vec![
         Value::Integer(Integer::from(cmp_val)),
         Value::Array(parts),
@@ -274,7 +277,10 @@ fn encode_text(text: &SuitText) -> Result<Vec<u8>, CodecError> {
     let mut entries: Vec<(Value, Value)> = Vec::new();
 
     if let Some(ref desc) = text.description {
-        entries.push((int_key(SUIT_TEXT_MANIFEST_DESCRIPTION), Value::Text(desc.clone())));
+        entries.push((
+            int_key(SUIT_TEXT_MANIFEST_DESCRIPTION),
+            Value::Text(desc.clone()),
+        ));
     }
 
     for (_idx, tc) in &text.components {
@@ -289,20 +295,37 @@ fn encode_text(text: &SuitText) -> Result<Vec<u8>, CodecError> {
 
 fn encode_text_component(tc: &TextComponent) -> Result<Value, CodecError> {
     let mut entries: Vec<(Value, Value)> = Vec::new();
-    if let Some(ref s) = tc.vendor_name { entries.push((int_key(1), Value::Text(s.clone()))); }
-    if let Some(ref s) = tc.model_name { entries.push((int_key(2), Value::Text(s.clone()))); }
-    if let Some(ref s) = tc.vendor_domain { entries.push((int_key(3), Value::Text(s.clone()))); }
-    if let Some(ref s) = tc.model_info { entries.push((int_key(4), Value::Text(s.clone()))); }
-    if let Some(ref s) = tc.description { entries.push((int_key(5), Value::Text(s.clone()))); }
-    if let Some(ref s) = tc.version { entries.push((int_key(6), Value::Text(s.clone()))); }
+    if let Some(ref s) = tc.vendor_name {
+        entries.push((int_key(1), Value::Text(s.clone())));
+    }
+    if let Some(ref s) = tc.model_name {
+        entries.push((int_key(2), Value::Text(s.clone())));
+    }
+    if let Some(ref s) = tc.vendor_domain {
+        entries.push((int_key(3), Value::Text(s.clone())));
+    }
+    if let Some(ref s) = tc.model_info {
+        entries.push((int_key(4), Value::Text(s.clone())));
+    }
+    if let Some(ref s) = tc.description {
+        entries.push((int_key(5), Value::Text(s.clone())));
+    }
+    if let Some(ref s) = tc.version {
+        entries.push((int_key(6), Value::Text(s.clone())));
+    }
     Ok(Value::Map(entries))
 }
 
 // --- Component ID encoding ---
 
-fn encode_component_id(comp: &crate::component::ComponentIdentifier) -> Result<Vec<u8>, CodecError> {
+fn encode_component_id(
+    comp: &crate::component::ComponentIdentifier,
+) -> Result<Vec<u8>, CodecError> {
     let arr = Value::Array(
-        comp.segments.iter().map(|s| Value::Bytes(s.clone())).collect(),
+        comp.segments
+            .iter()
+            .map(|s| Value::Bytes(s.clone()))
+            .collect(),
     );
     cbor_serialize(&arr)
 }

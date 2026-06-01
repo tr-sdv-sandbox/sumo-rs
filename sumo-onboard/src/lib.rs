@@ -11,8 +11,8 @@
 
 // TODO: Add #![no_std] + extern crate alloc once dependency no_std support is verified
 
-pub mod decryptor;
 pub mod decompressor;
+pub mod decryptor;
 pub mod device_id;
 pub mod error;
 #[cfg(feature = "linux-platform")]

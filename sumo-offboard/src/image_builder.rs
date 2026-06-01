@@ -60,30 +60,75 @@ impl ImageManifestBuilder {
         }
     }
 
-    pub fn component_id(mut self, id: Vec<String>) -> Self { self.component_id = id; self }
-    pub fn sequence_number(mut self, seq: u64) -> Self { self.sequence_number = seq; self }
-    pub fn vendor_id(mut self, v: Uuid) -> Self { self.vendor_id = Some(v); self }
-    pub fn class_id(mut self, c: Uuid) -> Self { self.class_id = Some(c); self }
-    pub fn device_id(mut self, d: Uuid) -> Self { self.device_id = Some(d); self }
-    pub fn sem_ver(mut self, v: SemVer) -> Self { self.version = Some(v); self }
+    pub fn component_id(mut self, id: Vec<String>) -> Self {
+        self.component_id = id;
+        self
+    }
+    pub fn sequence_number(mut self, seq: u64) -> Self {
+        self.sequence_number = seq;
+        self
+    }
+    pub fn vendor_id(mut self, v: Uuid) -> Self {
+        self.vendor_id = Some(v);
+        self
+    }
+    pub fn class_id(mut self, c: Uuid) -> Self {
+        self.class_id = Some(c);
+        self
+    }
+    pub fn device_id(mut self, d: Uuid) -> Self {
+        self.device_id = Some(d);
+        self
+    }
+    pub fn sem_ver(mut self, v: SemVer) -> Self {
+        self.version = Some(v);
+        self
+    }
     pub fn payload_digest(mut self, sha256: &[u8], size: u64) -> Self {
         self.payload_digest = Some(sha256.to_vec());
         self.payload_size = size;
         self
     }
-    pub fn payload_uri(mut self, uri: String) -> Self { self.payload_uri = Some(uri); self }
-    pub fn fallback_uri(mut self, uri: String) -> Self { self.fallback_uris.push(uri); self }
-    pub fn encryption_info(mut self, info: &[u8]) -> Self { self.encryption_info = Some(info.to_vec()); self }
+    pub fn payload_uri(mut self, uri: String) -> Self {
+        self.payload_uri = Some(uri);
+        self
+    }
+    pub fn fallback_uri(mut self, uri: String) -> Self {
+        self.fallback_uris.push(uri);
+        self
+    }
+    pub fn encryption_info(mut self, info: &[u8]) -> Self {
+        self.encryption_info = Some(info.to_vec());
+        self
+    }
     pub fn integrated_payload(mut self, key: String, data: Vec<u8>) -> Self {
         self.integrated_payloads.insert(key, data);
         self
     }
-    pub fn security_version(mut self, v: u64) -> Self { self.security_version = Some(v); self }
-    pub fn text_vendor_name(mut self, s: impl Into<String>) -> Self { self.text_vendor_name = Some(s.into()); self }
-    pub fn text_model_name(mut self, s: impl Into<String>) -> Self { self.text_model_name = Some(s.into()); self }
-    pub fn text_model_info(mut self, s: impl Into<String>) -> Self { self.text_model_info = Some(s.into()); self }
-    pub fn text_version(mut self, s: impl Into<String>) -> Self { self.text_version = Some(s.into()); self }
-    pub fn text_description(mut self, s: impl Into<String>) -> Self { self.text_description = Some(s.into()); self }
+    pub fn security_version(mut self, v: u64) -> Self {
+        self.security_version = Some(v);
+        self
+    }
+    pub fn text_vendor_name(mut self, s: impl Into<String>) -> Self {
+        self.text_vendor_name = Some(s.into());
+        self
+    }
+    pub fn text_model_name(mut self, s: impl Into<String>) -> Self {
+        self.text_model_name = Some(s.into());
+        self
+    }
+    pub fn text_model_info(mut self, s: impl Into<String>) -> Self {
+        self.text_model_info = Some(s.into());
+        self
+    }
+    pub fn text_version(mut self, s: impl Into<String>) -> Self {
+        self.text_version = Some(s.into());
+        self
+    }
+    pub fn text_description(mut self, s: impl Into<String>) -> Self {
+        self.text_description = Some(s.into());
+        self
+    }
 
     /// Build and sign the SUIT envelope.
     pub fn build(self, signing_key: &CoseKey) -> Result<Vec<u8>, OffboardError> {
@@ -91,7 +136,11 @@ impl ImageManifestBuilder {
 
         // Build component identifier
         let comp = ComponentIdentifier {
-            segments: self.component_id.iter().map(|s| s.as_bytes().to_vec()).collect(),
+            segments: self
+                .component_id
+                .iter()
+                .map(|s| s.as_bytes().to_vec())
+                .collect(),
         };
 
         // Build shared command sequence with override-parameters
@@ -226,11 +275,17 @@ impl ImageManifestBuilder {
             common: SuitCommon {
                 components: vec![comp],
                 dependencies: Vec::new(),
-                shared_sequence: CommandSequence { items: shared_items },
+                shared_sequence: CommandSequence {
+                    items: shared_items,
+                },
             },
             validate,
             invoke,
-            severable: SeverableMembers { text, install, ..SeverableMembers::default() },
+            severable: SeverableMembers {
+                text,
+                install,
+                ..SeverableMembers::default()
+            },
         };
 
         // Encode manifest to compute digest
@@ -307,11 +362,26 @@ impl MultiComponentBuilder {
         }
     }
 
-    pub fn sequence_number(mut self, seq: u64) -> Self { self.sequence_number = seq; self }
-    pub fn security_version(mut self, v: u64) -> Self { self.security_version = Some(v); self }
-    pub fn text_version(mut self, s: impl Into<String>) -> Self { self.text_version = Some(s.into()); self }
-    pub fn text_model_name(mut self, s: impl Into<String>) -> Self { self.text_model_name = Some(s.into()); self }
-    pub fn text_description(mut self, s: impl Into<String>) -> Self { self.text_description = Some(s.into()); self }
+    pub fn sequence_number(mut self, seq: u64) -> Self {
+        self.sequence_number = seq;
+        self
+    }
+    pub fn security_version(mut self, v: u64) -> Self {
+        self.security_version = Some(v);
+        self
+    }
+    pub fn text_version(mut self, s: impl Into<String>) -> Self {
+        self.text_version = Some(s.into());
+        self
+    }
+    pub fn text_model_name(mut self, s: impl Into<String>) -> Self {
+        self.text_model_name = Some(s.into());
+        self
+    }
+    pub fn text_description(mut self, s: impl Into<String>) -> Self {
+        self.text_description = Some(s.into());
+        self
+    }
 
     /// Add a component to the manifest.
     pub fn add_component(mut self, spec: ComponentSpec) -> Self {
@@ -334,11 +404,13 @@ impl MultiComponentBuilder {
         }
 
         // Build component identifiers
-        let components: Vec<ComponentIdentifier> = self.components.iter().map(|c| {
-            ComponentIdentifier {
+        let components: Vec<ComponentIdentifier> = self
+            .components
+            .iter()
+            .map(|c| ComponentIdentifier {
                 segments: c.id.iter().map(|s| s.as_bytes().to_vec()).collect(),
-            }
-        }).collect();
+            })
+            .collect();
 
         // Build shared command sequence with per-component parameters
         let mut shared_items = Vec::new();
@@ -423,7 +495,8 @@ impl MultiComponentBuilder {
                 description: None,
                 version: self.text_version,
             };
-            let has_text = tc.model_name.is_some() || tc.version.is_some() || self.text_description.is_some();
+            let has_text =
+                tc.model_name.is_some() || tc.version.is_some() || self.text_description.is_some();
             if has_text {
                 let mut text_components = std::collections::BTreeMap::new();
                 text_components.insert(0, tc);
@@ -442,11 +515,17 @@ impl MultiComponentBuilder {
             common: SuitCommon {
                 components,
                 dependencies: Vec::new(),
-                shared_sequence: CommandSequence { items: shared_items },
+                shared_sequence: CommandSequence {
+                    items: shared_items,
+                },
             },
             validate,
             invoke,
-            severable: SeverableMembers { text, install, ..SeverableMembers::default() },
+            severable: SeverableMembers {
+                text,
+                install,
+                ..SeverableMembers::default()
+            },
         };
 
         let manifest_bytes = sumo_codec::encode::encode_manifest(&manifest)?;
@@ -500,10 +579,15 @@ pub(crate) fn sign_manifest(
     })?;
 
     // Build COSE_Sign1 protected header with algorithm
-    let alg = key.inner().alg.as_ref().map(|a| match a {
-        coset::RegisteredLabelWithPrivate::Assigned(alg) => *alg as i64,
-        _ => -7, // default ES256
-    }).unwrap_or(-7);
+    let alg = key
+        .inner()
+        .alg
+        .as_ref()
+        .map(|a| match a {
+            coset::RegisteredLabelWithPrivate::Assigned(alg) => *alg as i64,
+            _ => -7, // default ES256
+        })
+        .unwrap_or(-7);
 
     let protected = encode_protected_header(alg)?;
 
@@ -529,13 +613,14 @@ pub(crate) fn sign_manifest(
     let _ = digest_cbor; // signed-over but not embedded (detached)
 
     let mut buf = Vec::new();
-    ciborium::ser::into_writer(&sign1, &mut buf)
-        .map_err(|_| sumo_codec::CodecError::CborEncode)?;
+    ciborium::ser::into_writer(&sign1, &mut buf).map_err(|_| sumo_codec::CodecError::CborEncode)?;
     Ok(buf)
 }
 
 /// Public re-export so campaign_builder can share the same helper.
-pub(crate) fn cbor_bstr_wrap_pub(bytes: &[u8]) -> Vec<u8> { cbor_bstr_wrap(bytes) }
+pub(crate) fn cbor_bstr_wrap_pub(bytes: &[u8]) -> Vec<u8> {
+    cbor_bstr_wrap(bytes)
+}
 
 /// Wrap raw bytes in a CBOR byte-string header, returning the on-the-wire
 /// bstr encoding. Used so manifest-digest hashes match libcsuit's
@@ -574,8 +659,7 @@ fn encode_digest_cbor(digest: &DigestInfo) -> Result<Vec<u8>, sumo_codec::CodecE
         Value::Bytes(digest.bytes.clone()),
     ]);
     let mut buf = Vec::new();
-    ciborium::ser::into_writer(&arr, &mut buf)
-        .map_err(|_| sumo_codec::CodecError::CborEncode)?;
+    ciborium::ser::into_writer(&arr, &mut buf).map_err(|_| sumo_codec::CodecError::CborEncode)?;
     Ok(buf)
 }
 
@@ -586,7 +670,6 @@ fn encode_protected_header(alg: i64) -> Result<Vec<u8>, sumo_codec::CodecError> 
         Value::Integer(Integer::from(alg)),
     )]);
     let mut buf = Vec::new();
-    ciborium::ser::into_writer(&map, &mut buf)
-        .map_err(|_| sumo_codec::CodecError::CborEncode)?;
+    ciborium::ser::into_writer(&map, &mut buf).map_err(|_| sumo_codec::CodecError::CborEncode)?;
     Ok(buf)
 }

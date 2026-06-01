@@ -7,14 +7,14 @@ use std::io::Read as _;
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
+use sumo_codec::types::Uuid;
 use sumo_crypto::{CryptoBackend, RustCryptoBackend};
+use sumo_offboard::campaign_builder::CampaignBuilder;
 use sumo_offboard::cose_key::CoseKey;
 use sumo_offboard::encryptor;
 use sumo_offboard::image_builder::ImageManifestBuilder;
-use sumo_offboard::campaign_builder::CampaignBuilder;
 use sumo_offboard::keygen;
 use sumo_offboard::recipient::Recipient;
-use sumo_codec::types::Uuid;
 
 #[derive(Parser)]
 #[command(name = "sumo-tool", about = "SUIT manifest and key management tool")]
@@ -394,7 +394,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(ref p) = desc.payload {
                     if p.file.as_deref() == Some("-") {
                         return Err("cannot read both manifest and payload from stdin; \
-                            write the manifest to a file or use a named pipe".into());
+                            write the manifest to a file or use a named pipe"
+                            .into());
                     }
                 }
             }
@@ -426,19 +427,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             encryption_info: encryption_info_path,
         } => {
             // CLI-flags build path
-            let signing_key = signing_key
-                .ok_or("--signing-key is required (or use --manifest)")?;
-            let output = output
-                .ok_or("--output is required (or use --manifest)")?;
-            let component = component
-                .ok_or("--component is required (or use --manifest)")?;
+            let signing_key = signing_key.ok_or("--signing-key is required (or use --manifest)")?;
+            let output = output.ok_or("--output is required (or use --manifest)")?;
+            let component = component.ok_or("--component is required (or use --manifest)")?;
 
             let key_bytes = fs::read(&signing_key)?;
             let key = CoseKey::from_cose_key_bytes(&key_bytes)?;
             let comp_id: Vec<String> = component.split(',').map(|s| s.to_string()).collect();
 
             // Two modes: firmware file (full build) or digest+size (reference build)
-            let (digest, fw_size, final_payload, enc_info, cek) = if let Some(ref fw_path) = firmware {
+            let (digest, fw_size, final_payload, enc_info, cek) = if let Some(ref fw_path) =
+                firmware
+            {
                 if payload_digest_hex.is_some() || payload_size.is_some() {
                     return Err("cannot use --firmware with --payload-digest/--payload-size".into());
                 }
@@ -450,15 +450,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .unwrap_or_default();
 
                 let (digest, fw_size, final_payload, enc_info, cek) =
-                    process_payload(&fw_data, compress, zstd_window_log,
-                                    &encrypt_paths)?;
+                    process_payload(&fw_data, compress, zstd_window_log, &encrypt_paths)?;
                 (digest, fw_size, Some(final_payload), enc_info, cek)
             } else {
                 // Reference build mode — no firmware file
                 let digest_hex = payload_digest_hex
                     .ok_or("--payload-digest required when --firmware is omitted")?;
-                let size = payload_size
-                    .ok_or("--payload-size required when --firmware is omitted")?;
+                let size =
+                    payload_size.ok_or("--payload-size required when --firmware is omitted")?;
                 if compress || encrypt.is_some() {
                     return Err("--compress/--encrypt require --firmware".into());
                 }
@@ -511,14 +510,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             if let Some(ref fp) = final_payload {
                 if payload_output.is_none() {
-                    builder = builder
-                        .integrated_payload("#firmware".to_string(), fp.clone());
+                    builder = builder.integrated_payload("#firmware".to_string(), fp.clone());
                 }
             }
 
             let envelope = builder.build(&key)?;
             fs::write(&output, &envelope)?;
-            eprintln!("Wrote manifest to {} ({} bytes)", output.display(), envelope.len());
+            eprintln!(
+                "Wrote manifest to {} ({} bytes)",
+                output.display(),
+                envelope.len()
+            );
 
             if let Some(po) = payload_output {
                 if let Some(ref fp) = final_payload {
@@ -528,7 +530,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if let Some(ref ei) = enc_info {
                         let ei_path = PathBuf::from(format!("{}.enc-info", po.display()));
                         fs::write(&ei_path, ei)?;
-                        eprintln!("Wrote encryption info to {} ({} bytes)", ei_path.display(), ei.len());
+                        eprintln!(
+                            "Wrote encryption info to {} ({} bytes)",
+                            ei_path.display(),
+                            ei.len()
+                        );
                     }
                     if let Some(ref cek_bytes) = cek {
                         let cek_path = PathBuf::from(format!("{}.cek", po.display()));
@@ -550,8 +556,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     println!("  Sequence number:  {}", m.sequence_number);
                     println!("  Components:       {}", m.common.components.len());
                     println!("  Dependencies:     {}", m.common.dependencies.len());
-                    println!("  Signatures:       {}", envelope.authentication.signatures.len());
-                    println!("  Integrated payloads: {}", envelope.integrated_payloads.len());
+                    println!(
+                        "  Signatures:       {}",
+                        envelope.authentication.signatures.len()
+                    );
+                    println!(
+                        "  Integrated payloads: {}",
+                        envelope.integrated_payloads.len()
+                    );
 
                     for (i, comp) in m.common.components.iter().enumerate() {
                         let segs: Vec<String> = comp
@@ -563,7 +575,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
 
                     if m.common.dependencies.len() > 0 {
-                        println!("  (Campaign manifest with {} dependencies)", m.common.dependencies.len());
+                        println!(
+                            "  (Campaign manifest with {} dependencies)",
+                            m.common.dependencies.len()
+                        );
                     }
 
                     // Digest info
@@ -583,12 +598,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
-        Command::Verify { input, trust_anchor } => {
+        Command::Verify {
+            input,
+            trust_anchor,
+        } => {
             let data = fs::read(&input)?;
             let anchor_bytes = fs::read(&trust_anchor)?;
 
             println!("envelope:     {} ({} bytes)", input.display(), data.len());
-            println!("trust anchor: {} ({} bytes)", trust_anchor.display(), anchor_bytes.len());
+            println!(
+                "trust anchor: {} ({} bytes)",
+                trust_anchor.display(),
+                anchor_bytes.len()
+            );
             println!("anchor hex:   {}", hex::encode(&anchor_bytes));
 
             // Try to decode the envelope to surface the COSE_Sign1 protected
@@ -596,8 +618,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // signer wrote.
             match sumo_codec::decode::decode_envelope(&data) {
                 Ok(envelope) => {
-                    println!("envelope decoded ✓ ({} signatures)",
-                             envelope.authentication.signatures.len());
+                    println!(
+                        "envelope decoded ✓ ({} signatures)",
+                        envelope.authentication.signatures.len()
+                    );
                     for (i, sig) in envelope.authentication.signatures.iter().enumerate() {
                         println!("  signature[{i}]: {} bytes", sig.len());
                     }
@@ -637,8 +661,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if payload.len() != keys.len() {
                 return Err(format!(
                     "mismatched -p and --key counts: {} payloads, {} keys",
-                    payload.len(), keys.len()
-                ).into());
+                    payload.len(),
+                    keys.len()
+                )
+                .into());
             }
 
             let manifest_data = fs::read(&manifest)?;
@@ -655,7 +681,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut new_entries = entries;
             for (p, k) in payload.iter().zip(keys.iter()) {
                 let payload_data = fs::read(p)?;
-                eprintln!("Attaching payload ({} bytes) as {:?}", payload_data.len(), k);
+                eprintln!(
+                    "Attaching payload ({} bytes) as {:?}",
+                    payload_data.len(),
+                    k
+                );
                 new_entries.push((
                     ciborium::Value::Text(k.clone()),
                     ciborium::Value::Bytes(payload_data),
@@ -668,7 +698,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .map_err(|e| format!("failed to encode CBOR: {e}"))?;
 
             fs::write(&output, &buf)?;
-            eprintln!("Wrote integrated envelope to {} ({} bytes)", output.display(), buf.len());
+            eprintln!(
+                "Wrote integrated envelope to {} ({} bytes)",
+                output.display(),
+                buf.len()
+            );
         }
 
         Command::Campaign {
@@ -724,8 +758,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if cek.len() != enc_info.len() {
                 return Err(format!(
                     "mismatched --cek and --enc-info counts: {} vs {}",
-                    cek.len(), enc_info.len()
-                ).into());
+                    cek.len(),
+                    enc_info.len()
+                )
+                .into());
             }
             if cek.is_empty() {
                 return Err("at least one --cek + --enc-info pair required".into());
@@ -741,7 +777,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             for (i, (cek_path, ei_path)) in cek.iter().zip(enc_info.iter()).enumerate() {
                 let cek_bytes = fs::read(cek_path)?;
                 if cek_bytes.len() != 16 {
-                    return Err(format!("CEK {} must be 16 bytes, got {}", cek_path.display(), cek_bytes.len()).into());
+                    return Err(format!(
+                        "CEK {} must be 16 bytes, got {}",
+                        cek_path.display(),
+                        cek_bytes.len()
+                    )
+                    .into());
                 }
                 let mut cek_arr = [0u8; 16];
                 cek_arr.copy_from_slice(&cek_bytes);
@@ -755,7 +796,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let out_path = if cek.len() == 1 {
                     output.clone()
                 } else {
-                    let name = ei_path.file_name()
+                    let name = ei_path
+                        .file_name()
                         .map(|n| n.to_string_lossy().to_string())
                         .unwrap_or_else(|| format!("enc-info-{i}"));
                     fs::create_dir_all(&output)?;
@@ -813,7 +855,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     fs::write(&p, &yaml)?;
                     eprintln!(
                         "Wrote {} for vm_id={vm_id} ({} bytes) to {}",
-                        if standalone { "bootstrap.yaml" } else { "yaml fragment" },
+                        if standalone {
+                            "bootstrap.yaml"
+                        } else {
+                            "yaml fragment"
+                        },
                         yaml.len(),
                         p.display(),
                     );
@@ -834,9 +880,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             lifetime_secs,
             output,
         } => {
+            use std::time::{SystemTime, UNIX_EPOCH};
             use sumo_offboard::cose_key::CoseKey;
             use sumo_offboard::cwt::{mint_cwt, ValidityWindow};
-            use std::time::{SystemTime, UNIX_EPOCH};
 
             // Load signer (ES256 private key) from COSE_Key CBOR.
             let signer_bytes = fs::read(&signing_key)?;
@@ -880,8 +926,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 /// Parse a hex SHA-256 digest string into a 32-byte array.
 fn parse_digest_hex(hex_str: &str) -> Result<[u8; 32], Box<dyn std::error::Error>> {
-    let bytes = hex::decode(hex_str)
-        .map_err(|e| format!("invalid digest hex: {e}"))?;
+    let bytes = hex::decode(hex_str).map_err(|e| format!("invalid digest hex: {e}"))?;
     if bytes.len() != 32 {
         return Err("digest must be 64 hex chars (32 bytes SHA-256)".into());
     }
@@ -898,7 +943,8 @@ fn process_payload(
     compress: bool,
     zstd_window_log: Option<u32>,
     encrypt_key_paths: &[PathBuf],
-) -> Result<([u8; 32], u64, Vec<u8>, Option<Vec<u8>>, Option<[u8; 16]>), Box<dyn std::error::Error>> {
+) -> Result<([u8; 32], u64, Vec<u8>, Option<Vec<u8>>, Option<[u8; 16]>), Box<dyn std::error::Error>>
+{
     let crypto = RustCryptoBackend::new();
 
     // Optionally compress
@@ -932,7 +978,8 @@ fn process_payload(
             let pub_recipients: Vec<Recipient> = recipients
                 .into_iter()
                 .map(|r| Recipient {
-                    public_key: CoseKey::from_cose_key_bytes(&r.public_key.public_key_bytes()).unwrap(),
+                    public_key: CoseKey::from_cose_key_bytes(&r.public_key.public_key_bytes())
+                        .unwrap(),
                     kid: r.kid,
                 })
                 .collect();
@@ -944,7 +991,11 @@ fn process_payload(
         };
 
         eprintln!("Encrypted payload: {} bytes", encrypted.ciphertext.len());
-        (encrypted.ciphertext, Some(encrypted.encryption_info), Some(encrypted.cek))
+        (
+            encrypted.ciphertext,
+            Some(encrypted.encryption_info),
+            Some(encrypted.cek),
+        )
     } else {
         (payload, None, None)
     };
@@ -954,14 +1005,17 @@ fn process_payload(
 }
 
 /// Build a SUIT manifest from a YAML descriptor.
-fn build_from_manifest(desc: manifest::ManifestDescriptor) -> Result<(), Box<dyn std::error::Error>> {
+fn build_from_manifest(
+    desc: manifest::ManifestDescriptor,
+) -> Result<(), Box<dyn std::error::Error>> {
     if desc.is_multi_component() {
         return build_multi_component_manifest(desc);
     }
 
     let key_bytes = fs::read(&desc.signing_key)?;
     let key = CoseKey::from_cose_key_bytes(&key_bytes)?;
-    let comp_id = desc.component_id
+    let comp_id = desc
+        .component_id
         .ok_or("component_id required for single-component manifest")?
         .to_vec();
 
@@ -1005,9 +1059,12 @@ fn build_from_manifest(desc: manifest::ManifestDescriptor) -> Result<(), Box<dyn
                     .map(|e| e.device_keys.clone())
                     .unwrap_or_default();
 
-                let (digest, fw_size, processed, enc_info, cek) =
-                    process_payload(&fw_data, payload.compress,
-                                    payload.zstd_window_log, &encrypt_paths)?;
+                let (digest, fw_size, processed, enc_info, cek) = process_payload(
+                    &fw_data,
+                    payload.compress,
+                    payload.zstd_window_log,
+                    &encrypt_paths,
+                )?;
                 (digest, fw_size, Some(processed), enc_info, cek)
             } else if let (Some(ref digest_hex), Some(size)) = (&payload.digest, payload.size) {
                 // Reference build mode
@@ -1091,23 +1148,30 @@ fn build_from_manifest(desc: manifest::ManifestDescriptor) -> Result<(), Box<dyn
 }
 
 /// Build a multi-component SUIT manifest from a YAML descriptor.
-fn build_multi_component_manifest(desc: manifest::ManifestDescriptor) -> Result<(), Box<dyn std::error::Error>> {
-    use sumo_offboard::image_builder::{MultiComponentBuilder, ComponentSpec};
+fn build_multi_component_manifest(
+    desc: manifest::ManifestDescriptor,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use sumo_offboard::image_builder::{ComponentSpec, MultiComponentBuilder};
 
     let key_bytes = fs::read(&desc.signing_key)?;
     let key = CoseKey::from_cose_key_bytes(&key_bytes)?;
 
     let components = desc.components.unwrap();
-    let mut builder = MultiComponentBuilder::new()
-        .sequence_number(desc.sequence_number);
+    let mut builder = MultiComponentBuilder::new().sequence_number(desc.sequence_number);
 
     if let Some(sv) = desc.security_version {
         builder = builder.security_version(sv);
     }
     if let Some(ref meta) = desc.metadata {
-        if let Some(ref v) = meta.version { builder = builder.text_version(v); }
-        if let Some(ref m) = meta.model_name { builder = builder.text_model_name(m); }
-        if let Some(ref d) = meta.description { builder = builder.text_description(d); }
+        if let Some(ref v) = meta.version {
+            builder = builder.text_version(v);
+        }
+        if let Some(ref m) = meta.model_name {
+            builder = builder.text_model_name(m);
+        }
+        if let Some(ref d) = meta.description {
+            builder = builder.text_description(d);
+        }
     }
 
     // Process each component
@@ -1125,14 +1189,18 @@ fn build_multi_component_manifest(desc: manifest::ManifestDescriptor) -> Result<
                 fs::read(file_path)?
             };
 
-            let encrypt_paths: Vec<std::path::PathBuf> = payload.encrypt
+            let encrypt_paths: Vec<std::path::PathBuf> = payload
+                .encrypt
                 .as_ref()
                 .map(|e| e.device_keys.clone())
                 .unwrap_or_default();
 
-            let (digest, fw_size, processed, enc_info, cek) =
-                process_payload(&fw_data, payload.compress,
-                                payload.zstd_window_log, &encrypt_paths)?;
+            let (digest, fw_size, processed, enc_info, cek) = process_payload(
+                &fw_data,
+                payload.compress,
+                payload.zstd_window_log,
+                &encrypt_paths,
+            )?;
 
             builder = builder.add_component(ComponentSpec {
                 id: comp_desc.id.to_vec(),
@@ -1146,12 +1214,21 @@ fn build_multi_component_manifest(desc: manifest::ManifestDescriptor) -> Result<
             if let Some(ref payloads_map) = desc.output.payloads {
                 if let Some(po) = payloads_map.get(&uri) {
                     fs::write(po, &processed)?;
-                    eprintln!("Wrote payload to {} ({} bytes)", po.display(), processed.len());
+                    eprintln!(
+                        "Wrote payload to {} ({} bytes)",
+                        po.display(),
+                        processed.len()
+                    );
 
                     if let Some(ref ei) = enc_info {
-                        let ei_path = std::path::PathBuf::from(format!("{}.enc-info", po.display()));
+                        let ei_path =
+                            std::path::PathBuf::from(format!("{}.enc-info", po.display()));
                         fs::write(&ei_path, ei)?;
-                        eprintln!("Wrote encryption info to {} ({} bytes)", ei_path.display(), ei.len());
+                        eprintln!(
+                            "Wrote encryption info to {} ({} bytes)",
+                            ei_path.display(),
+                            ei.len()
+                        );
                     }
                     if let Some(ref cek_bytes) = cek {
                         let cek_path = std::path::PathBuf::from(format!("{}.cek", po.display()));
@@ -1166,7 +1243,8 @@ fn build_multi_component_manifest(desc: manifest::ManifestDescriptor) -> Result<
         } else if let (Some(ref digest_hex), Some(size)) = (&payload.digest, payload.size) {
             // Reference build mode
             let digest = parse_digest_hex(digest_hex)?;
-            let enc_info = payload.encryption_info
+            let enc_info = payload
+                .encryption_info
                 .as_ref()
                 .map(|p| fs::read(p))
                 .transpose()
@@ -1183,7 +1261,8 @@ fn build_multi_component_manifest(desc: manifest::ManifestDescriptor) -> Result<
             return Err(format!(
                 "component {:?}: need either 'file' or 'digest' + 'size'",
                 comp_desc.id.to_vec()
-            ).into());
+            )
+            .into());
         }
     }
 

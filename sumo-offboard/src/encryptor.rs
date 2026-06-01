@@ -32,8 +32,12 @@ pub fn encrypt_firmware(
     // Generate random CEK and IV
     let mut cek = [0u8; 16];
     let mut iv = [0u8; 12];
-    crypto.random_bytes(&mut cek).map_err(|e| OffboardError::Crypto(e))?;
-    crypto.random_bytes(&mut iv).map_err(|e| OffboardError::Crypto(e))?;
+    crypto
+        .random_bytes(&mut cek)
+        .map_err(|e| OffboardError::Crypto(e))?;
+    crypto
+        .random_bytes(&mut iv)
+        .map_err(|e| OffboardError::Crypto(e))?;
 
     // Encrypt plaintext with AES-128-GCM
     let ciphertext = crypto
@@ -52,8 +56,8 @@ pub fn encrypt_firmware(
         let rcpt = Value::Array(vec![
             Value::Bytes(Vec::new()), // empty protected
             Value::Map(vec![
-                (int_val(1), int_val(ck::COSE_ALG_A128KW)),    // algorithm
-                (int_val(4), Value::Bytes(r.kid.clone())),       // kid
+                (int_val(1), int_val(ck::COSE_ALG_A128KW)), // algorithm
+                (int_val(4), Value::Bytes(r.kid.clone())),  // kid
             ]),
             Value::Bytes(wrapped),
         ]);
@@ -61,7 +65,11 @@ pub fn encrypt_firmware(
     }
 
     let encryption_info = build_cose_encrypt(&iv, rcpt_values)?;
-    Ok(EncryptedPayload { ciphertext, encryption_info, cek })
+    Ok(EncryptedPayload {
+        ciphertext,
+        encryption_info,
+        cek,
+    })
 }
 
 /// Encrypt firmware with ECDH-ES+A128KW key agreement.
@@ -77,8 +85,12 @@ pub fn encrypt_firmware_ecdh(
     // Generate random CEK and IV
     let mut cek = [0u8; 16];
     let mut iv = [0u8; 12];
-    crypto.random_bytes(&mut cek).map_err(|e| OffboardError::Crypto(e))?;
-    crypto.random_bytes(&mut iv).map_err(|e| OffboardError::Crypto(e))?;
+    crypto
+        .random_bytes(&mut cek)
+        .map_err(|e| OffboardError::Crypto(e))?;
+    crypto
+        .random_bytes(&mut iv)
+        .map_err(|e| OffboardError::Crypto(e))?;
 
     // Encrypt plaintext with AES-128-GCM
     let ciphertext = crypto
@@ -86,11 +98,10 @@ pub fn encrypt_firmware_ecdh(
         .map_err(|e| OffboardError::Crypto(e))?;
 
     // Extract sender private key
-    let sender_ec2 = ck::extract_ec2(sender_key.inner())
-        .map_err(|e| OffboardError::Crypto(e))?;
-    let sender_d = sender_ec2.d.ok_or_else(|| {
-        OffboardError::Other("sender key missing private material".into())
-    })?;
+    let sender_ec2 = ck::extract_ec2(sender_key.inner()).map_err(|e| OffboardError::Crypto(e))?;
+    let sender_d = sender_ec2
+        .d
+        .ok_or_else(|| OffboardError::Other("sender key missing private material".into()))?;
 
     // Build sender public key as COSE_Key for recipient unprotected header
     let sender_pub = build_ec2_pub_cose_key(&sender_ec2.x, &sender_ec2.y);
@@ -101,19 +112,15 @@ pub fn encrypt_firmware_ecdh(
     // Wrap CEK for each recipient using ECDH-ES+A128KW
     let mut rcpt_values = Vec::new();
     for r in recipients {
-        let rcpt_ec2 = ck::extract_ec2(r.public_key.inner())
-            .map_err(|e| OffboardError::Crypto(e))?;
+        let rcpt_ec2 =
+            ck::extract_ec2(r.public_key.inner()).map_err(|e| OffboardError::Crypto(e))?;
         let mut rcpt_pub = [0u8; 65];
         rcpt_pub[0] = 0x04;
         rcpt_pub[1..33].copy_from_slice(&rcpt_ec2.x);
         rcpt_pub[33..65].copy_from_slice(&rcpt_ec2.y);
 
         let wrapped = sumo_crypto::ecdh_es::ecdh_es_a128kw_wrap(
-            &crypto,
-            &sender_d,
-            &rcpt_pub,
-            &cek,
-            &protected,
+            &crypto, &sender_d, &rcpt_pub, &cek, &protected,
         )
         .map_err(|e| OffboardError::Crypto(e))?;
 
@@ -121,8 +128,8 @@ pub fn encrypt_firmware_ecdh(
         let rcpt = Value::Array(vec![
             Value::Bytes(protected.clone()),
             Value::Map(vec![
-                (int_val(4), Value::Bytes(r.kid.clone())),       // kid
-                (int_val(-1), sender_pub.clone()),                // ephemeral key
+                (int_val(4), Value::Bytes(r.kid.clone())), // kid
+                (int_val(-1), sender_pub.clone()),         // ephemeral key
             ]),
             Value::Bytes(wrapped),
         ]);
@@ -130,7 +137,11 @@ pub fn encrypt_firmware_ecdh(
     }
 
     let encryption_info = build_cose_encrypt(&iv, rcpt_values)?;
-    Ok(EncryptedPayload { ciphertext, encryption_info, cek })
+    Ok(EncryptedPayload {
+        ciphertext,
+        encryption_info,
+        cek,
+    })
 }
 
 /// Extract the IV from an existing COSE_Encrypt CBOR structure (enc-info file).
@@ -156,7 +167,11 @@ pub fn extract_iv_from_enc_info(enc_info: &[u8]) -> Result<[u8; 12], OffboardErr
             .iter()
             .find_map(|(k, v)| {
                 if let (Value::Integer(i), Value::Bytes(b)) = (k, v) {
-                    if i128::from(*i) == 5 { Some(b.clone()) } else { None }
+                    if i128::from(*i) == 5 {
+                        Some(b.clone())
+                    } else {
+                        None
+                    }
                 } else {
                     None
                 }
@@ -167,7 +182,8 @@ pub fn extract_iv_from_enc_info(enc_info: &[u8]) -> Result<[u8; 12], OffboardErr
 
     if iv_bytes.len() != 12 {
         return Err(OffboardError::Other(format!(
-            "IV is {} bytes, expected 12", iv_bytes.len()
+            "IV is {} bytes, expected 12",
+            iv_bytes.len()
         )));
     }
     let mut iv = [0u8; 12];
@@ -192,33 +208,27 @@ pub fn rewrap_cek_ecdh(
 
     // Generate fresh ephemeral sender key for this recipient
     let sender_key = crate::keygen::generate_device_key(crate::keygen::ES256)?;
-    let sender_ec2 = ck::extract_ec2(sender_key.inner())
-        .map_err(|e| OffboardError::Crypto(e))?;
-    let sender_d = sender_ec2.d.ok_or_else(|| {
-        OffboardError::Other("ephemeral key missing private material".into())
-    })?;
+    let sender_ec2 = ck::extract_ec2(sender_key.inner()).map_err(|e| OffboardError::Crypto(e))?;
+    let sender_d = sender_ec2
+        .d
+        .ok_or_else(|| OffboardError::Other("ephemeral key missing private material".into()))?;
     let sender_pub = build_ec2_pub_cose_key(&sender_ec2.x, &sender_ec2.y);
 
     // Protected header for ECDH-ES+A128KW: {1: -29}
     let protected = encode_protected_alg(ck::COSE_ALG_ECDH_ES_A128KW)?;
 
     // Extract recipient public key
-    let rcpt_ec2 = ck::extract_ec2(recipient.public_key.inner())
-        .map_err(|e| OffboardError::Crypto(e))?;
+    let rcpt_ec2 =
+        ck::extract_ec2(recipient.public_key.inner()).map_err(|e| OffboardError::Crypto(e))?;
     let mut rcpt_pub = [0u8; 65];
     rcpt_pub[0] = 0x04;
     rcpt_pub[1..33].copy_from_slice(&rcpt_ec2.x);
     rcpt_pub[33..65].copy_from_slice(&rcpt_ec2.y);
 
     // Wrap CEK for the recipient
-    let wrapped = sumo_crypto::ecdh_es::ecdh_es_a128kw_wrap(
-        &crypto,
-        &sender_d,
-        &rcpt_pub,
-        cek,
-        &protected,
-    )
-    .map_err(|e| OffboardError::Crypto(e))?;
+    let wrapped =
+        sumo_crypto::ecdh_es::ecdh_es_a128kw_wrap(&crypto, &sender_d, &rcpt_pub, cek, &protected)
+            .map_err(|e| OffboardError::Crypto(e))?;
 
     // Build single COSE_recipient
     let rcpt_value = Value::Array(vec![
@@ -248,8 +258,7 @@ pub fn compress_firmware(
     window_log: Option<u32>,
 ) -> Result<Vec<u8>, OffboardError> {
     use std::io::Write;
-    let mut encoder = zstd::Encoder::new(Vec::new(), level)
-        .map_err(OffboardError::Io)?;
+    let mut encoder = zstd::Encoder::new(Vec::new(), level).map_err(OffboardError::Io)?;
     if let Some(wl) = window_log {
         encoder
             .set_parameter(zstd::stream::raw::CParameter::WindowLog(wl))
@@ -273,7 +282,7 @@ fn build_cose_encrypt(iv: &[u8; 12], recipients: Vec<Value>) -> Result<Vec<u8>, 
     let cose_encrypt = Value::Array(vec![
         Value::Bytes(protected),
         Value::Map(vec![(int_val(5), Value::Bytes(iv.to_vec()))]), // unprotected: {5: IV}
-        Value::Null,                                                // detached ciphertext
+        Value::Null,                                               // detached ciphertext
         Value::Array(recipients),
     ]);
 
@@ -293,10 +302,10 @@ fn encode_protected_alg(alg: i64) -> Result<Vec<u8>, OffboardError> {
 
 fn build_ec2_pub_cose_key(x: &[u8], y: &[u8]) -> Value {
     Value::Map(vec![
-        (int_val(1), int_val(2)),                        // kty: EC2
-        (int_val(-1), int_val(1)),                       // crv: P-256
-        (int_val(-2), Value::Bytes(x.to_vec())),         // x
-        (int_val(-3), Value::Bytes(y.to_vec())),         // y
+        (int_val(1), int_val(2)),                // kty: EC2
+        (int_val(-1), int_val(1)),               // crv: P-256
+        (int_val(-2), Value::Bytes(x.to_vec())), // x
+        (int_val(-3), Value::Bytes(y.to_vec())), // y
     ])
 }
 
@@ -312,5 +321,7 @@ fn extract_symmetric_key(key: &coset::CoseKey) -> Result<Vec<u8>, OffboardError>
             }
         }
     }
-    Err(OffboardError::Other("symmetric key material not found in CoseKey".into()))
+    Err(OffboardError::Other(
+        "symmetric key material not found in CoseKey".into(),
+    ))
 }
