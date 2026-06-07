@@ -36,8 +36,12 @@ sumo-tools          CLI tool (sumo-tool): keygen, build, inspect, campaign
 - **Two-level manifests**: L1 campaign (process-dependency per ECU with
   staged install → validate → invoke) + L2 image (per-ECU firmware).
 
-- **Streaming crypto**: Decryption and decompression are streaming to support
-  constrained devices. The orchestrator processes payloads in 4KB chunks.
+- **Streaming crypto**: Decryption and decompression stream on-device to support
+  constrained targets (the orchestrator processes payloads in 4KB chunks).
+  Encryption streams too — `CryptoBackend::aes_gcm_encrypt_stream`
+  (`StreamingAeadEncryptor`) is the offboard mirror of `aes_gcm_decrypt_stream`,
+  for encrypting images too large to buffer. Its output is byte-identical to the
+  one-shot `aes_gcm_encrypt`, so the streaming decryptor accepts it unchanged.
 
 - **no_std support**: sumo-codec, sumo-crypto, sumo-onboard work without std
   (with alloc). PlatformOps abstracts all I/O.
@@ -51,6 +55,11 @@ sumo-codec/src/
   commands.rs           — CommandSequence, CommandItem, CommandValue
   text.rs               — SuitText, TextComponent
   encode.rs / decode.rs — CBOR serialization
+
+sumo-crypto/src/
+  traits.rs             — CryptoBackend (sign/verify, AEAD, ECDH, HKDF, key-wrap)
+  rustcrypto.rs         — RustCryptoBackend; streaming AES-128-GCM encryptor + decryptor
+  streaming.rs          — StreamingAeadEncryptor / StreamingAeadDecryptor / StreamingHash
 
 sumo-onboard/src/
   validator.rs          — Envelope validation (signature, digest, rollback)

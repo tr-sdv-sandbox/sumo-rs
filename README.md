@@ -7,7 +7,7 @@ Rust implementation of the [SUIT](https://datatracker.ietf.org/doc/draft-ietf-su
 | Crate | Purpose |
 |-------|---------|
 | **sumo-codec** | SUIT types, CBOR encode/decode, command sequences |
-| **sumo-crypto** | Crypto traits + RustCrypto backend (AES-GCM, ECDH, SHA-256, HKDF) |
+| **sumo-crypto** | Crypto traits + RustCrypto backend (AES-GCM incl. streaming, ECDH, SHA-256, HKDF) |
 | **sumo-onboard** | Device-side: validator, streaming decryptor/decompressor, orchestrator, PlatformOps trait |
 | **sumo-offboard** | Server-side: ImageManifestBuilder, CampaignBuilder, encryptor, keygen |
 | **sumo-processor** | SUIT command sequence interpreter (abstract machine) |
@@ -61,6 +61,28 @@ let mut decryptor = StreamingDecryptor::new(&manifest, 0, &unwrap, &crypto)?;
 decryptor.update(&ciphertext, &mut plaintext)?;
 decryptor.finalize(&mut plaintext)?;
 ```
+
+### Streaming Encryption (large payloads)
+
+The `encrypt_firmware*` helpers buffer the whole payload. For images too large to
+hold in memory, `sumo-crypto` exposes a streaming AES-128-GCM encryptor — the
+offboard mirror of the device's `StreamingDecryptor` — so a server can
+encrypt-once chunk by chunk under a fresh content-encryption key:
+
+```rust
+// Server: encrypt a large image without holding it in memory.
+let mut enc = crypto.aes_gcm_encrypt_stream(&cek, &iv, &[])?;  // AAD = empty
+let mut ct = vec![0u8; chunk_size];
+for chunk in payload_chunks {
+    let n = enc.update(chunk, &mut ct)?;   // ciphertext for this chunk
+    sink.write_all(&ct[..n])?;
+}
+sink.write_all(&enc.finalize()?)?;         // append the 16-byte GCM tag
+```
+
+The output is byte-identical to a one-shot `aes_gcm_encrypt`, so the
+`StreamingDecryptor` above accepts it unchanged. (The CEK can then be re-wrapped
+per device at envelope-build time, with no re-encryption.)
 
 ### Campaign Manifests (L1 + L2)
 

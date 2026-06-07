@@ -2,7 +2,7 @@
 
 use crate::cose_key;
 use crate::error::CryptoError;
-use crate::streaming::{StreamingAeadDecryptor, StreamingHash};
+use crate::streaming::{StreamingAeadDecryptor, StreamingAeadEncryptor, StreamingHash};
 use crate::traits::CryptoBackend;
 
 use sha2::Digest;
@@ -172,6 +172,15 @@ impl CryptoBackend for RustCryptoBackend {
 
         buffer.extend_from_slice(&tag);
         Ok(buffer)
+    }
+
+    fn aes_gcm_encrypt_stream(
+        &self,
+        key: &[u8; 16],
+        iv: &[u8; 12],
+        _aad: &[u8],
+    ) -> Result<Box<dyn StreamingAeadEncryptor>, CryptoError> {
+        Ok(Box::new(AesGcmStreamEncryptor::new(*key, *iv)))
     }
 
     fn random_bytes(&self, buf: &mut [u8]) -> Result<(), CryptoError> {
@@ -526,6 +535,175 @@ impl StreamingAeadDecryptor for AesGcmStreamDecryptor {
     }
 }
 
+// --- Streaming AES-128-GCM Encryptor ---
+
+/// True streaming AES-128-GCM encryptor — the mirror of
+/// [`AesGcmStreamDecryptor`]. Uses AES-CTR for the keystream and GHASH for
+/// incremental authentication; `update` emits ciphertext per chunk, `finalize`
+/// returns the GCM tag. For AAD = empty, the concatenation of all `update`
+/// output followed by `finalize`'s tag is byte-identical to a one-shot
+/// [`RustCryptoBackend::aes_gcm_encrypt`], so the streaming decryptor accepts it.
+struct AesGcmStreamEncryptor {
+    /// AES cipher for encrypting counter blocks
+    cipher: aes::Aes128,
+    /// Initial counter block (J0 = IV || 0x00000001) for final tag XOR
+    j0: [u8; 16],
+    /// Current counter (starts at 2 for payload)
+    counter: u32,
+    /// IV for counter block construction
+    iv: [u8; 12],
+    /// GHASH state for authentication
+    ghash: ghash::GHash,
+    /// Total ciphertext bytes processed
+    ct_bytes: u64,
+    /// Partial block buffer for 16-byte alignment of GHASH
+    ghash_partial: [u8; 16],
+    /// Bytes in ghash_partial
+    ghash_partial_len: usize,
+    /// Remaining keystream bytes from the current CTR block
+    keystream_buf: [u8; 16],
+    /// Offset into keystream_buf (how many bytes already consumed)
+    keystream_offset: usize,
+}
+
+impl AesGcmStreamEncryptor {
+    fn new(key: [u8; 16], iv: [u8; 12]) -> Self {
+        use aes::cipher::KeyInit;
+
+        let cipher = aes::Aes128::new(&key.into());
+
+        // Compute H = AES(K, 0^128) for GHASH
+        let mut h_block = aes::Block::default();
+        aes::cipher::BlockEncrypt::encrypt_block(&cipher, &mut h_block);
+
+        let ghash = ghash::GHash::new(&h_block);
+
+        // J0 = IV || 0x00000001
+        let mut j0 = [0u8; 16];
+        j0[..12].copy_from_slice(&iv);
+        j0[15] = 1;
+
+        Self {
+            cipher,
+            j0,
+            counter: 2, // GCM payload counter starts at 2
+            iv,
+            ghash,
+            ct_bytes: 0,
+            ghash_partial: [0u8; 16],
+            ghash_partial_len: 0,
+            keystream_buf: [0u8; 16],
+            keystream_offset: 16, // 16 = empty (need new block)
+        }
+    }
+
+    /// XOR `input` with the AES-CTR keystream into `output` (CTR is symmetric, so
+    /// this is the same keystream generation as the decryptor's `ctr_decrypt`).
+    fn ctr_xor(&mut self, input: &[u8], output: &mut [u8]) {
+        let mut pos = 0;
+
+        while pos < input.len() {
+            if self.keystream_offset >= 16 {
+                let mut ctr_block = aes::Block::default();
+                ctr_block[..12].copy_from_slice(&self.iv);
+                ctr_block[12..16].copy_from_slice(&self.counter.to_be_bytes());
+                self.counter = self.counter.wrapping_add(1);
+                aes::cipher::BlockEncrypt::encrypt_block(&self.cipher, &mut ctr_block);
+                self.keystream_buf = ctr_block.into();
+                self.keystream_offset = 0;
+            }
+
+            let n = (16 - self.keystream_offset).min(input.len() - pos);
+            for i in 0..n {
+                output[pos + i] = input[pos + i] ^ self.keystream_buf[self.keystream_offset + i];
+            }
+
+            self.keystream_offset += n;
+            pos += n;
+        }
+    }
+
+    /// Feed ciphertext bytes into GHASH (16-byte aligned blocks). Identical to
+    /// the decryptor's `ghash_feed`.
+    fn ghash_feed(&mut self, data: &[u8]) {
+        use ghash::universal_hash::UniversalHash;
+
+        let mut pos = 0;
+
+        if self.ghash_partial_len > 0 {
+            let need = 16 - self.ghash_partial_len;
+            let take = data.len().min(need);
+            self.ghash_partial[self.ghash_partial_len..self.ghash_partial_len + take]
+                .copy_from_slice(&data[..take]);
+            self.ghash_partial_len += take;
+            pos = take;
+
+            if self.ghash_partial_len == 16 {
+                let block = ghash::Block::from(self.ghash_partial);
+                self.ghash.update(&[block]);
+                self.ghash_partial_len = 0;
+            } else {
+                return;
+            }
+        }
+
+        while pos + 16 <= data.len() {
+            let block: [u8; 16] = data[pos..pos + 16].try_into().unwrap();
+            self.ghash.update(&[ghash::Block::from(block)]);
+            pos += 16;
+        }
+
+        if pos < data.len() {
+            let remain = data.len() - pos;
+            self.ghash_partial[..remain].copy_from_slice(&data[pos..]);
+            self.ghash_partial_len = remain;
+        }
+    }
+}
+
+impl StreamingAeadEncryptor for AesGcmStreamEncryptor {
+    fn update(&mut self, plaintext: &[u8], ciphertext: &mut [u8]) -> Result<usize, CryptoError> {
+        if plaintext.is_empty() {
+            return Ok(0);
+        }
+        let n = plaintext.len();
+        // Encrypt (CTR), then authenticate the ciphertext (GHASH over C).
+        self.ctr_xor(plaintext, &mut ciphertext[..n]);
+        self.ghash_feed(&ciphertext[..n]);
+        self.ct_bytes += n as u64;
+        Ok(n)
+    }
+
+    fn finalize(&mut self) -> Result<[u8; 16], CryptoError> {
+        use ghash::universal_hash::UniversalHash;
+
+        // Flush any partial GHASH block (pad with zeros)
+        if self.ghash_partial_len > 0 {
+            self.ghash_partial[self.ghash_partial_len..].fill(0);
+            let block = ghash::Block::from(self.ghash_partial);
+            self.ghash.update(&[block]);
+            self.ghash_partial_len = 0;
+        }
+
+        // Feed length block: [0^64 || len(C) in bits as u64 BE] (no AAD).
+        let ct_bits = self.ct_bytes * 8;
+        let mut len_block = [0u8; 16];
+        len_block[8..16].copy_from_slice(&ct_bits.to_be_bytes());
+        self.ghash.update(&[ghash::Block::from(len_block)]);
+
+        // S = GHASH finalize; tag = S XOR E(K, J0)
+        let s = self.ghash.clone().finalize();
+        let mut j0_enc = aes::Block::from(self.j0);
+        aes::cipher::BlockEncrypt::encrypt_block(&self.cipher, &mut j0_enc);
+
+        let mut tag = [0u8; 16];
+        for i in 0..16 {
+            tag[i] = s.as_slice()[i] ^ j0_enc[i];
+        }
+        Ok(tag)
+    }
+}
+
 // --- Streaming SHA-256 ---
 
 struct Sha256Stream(sha2::Sha256);
@@ -582,6 +760,53 @@ mod tests {
         let n = dec.update(&ct, &mut pt).unwrap();
         let n2 = dec.finalize(&mut pt[n..]).unwrap();
         assert_eq!(&pt[..n + n2], plaintext);
+    }
+
+    #[test]
+    fn aes_gcm_stream_encrypt_matches_oneshot_and_roundtrips() {
+        let backend = RustCryptoBackend::new();
+        let key = [0x42u8; 16];
+        let iv = [0x01u8; 12];
+        // Non-block-aligned length to exercise partial-block GHASH + keystream.
+        let plaintext: Vec<u8> = (0..10_003u32).map(|i| (i * 7) as u8).collect();
+
+        // One-shot reference.
+        let oneshot = backend.aes_gcm_encrypt(&key, &iv, &[], &plaintext).unwrap();
+
+        // Stream-encrypt in odd-sized chunks that straddle 16-byte boundaries.
+        let mut enc = backend.aes_gcm_encrypt_stream(&key, &iv, &[]).unwrap();
+        let mut streamed = Vec::new();
+        let mut buf = vec![0u8; 1000];
+        for chunk in plaintext.chunks(1000) {
+            let n = enc.update(chunk, &mut buf[..chunk.len()]).unwrap();
+            streamed.extend_from_slice(&buf[..n]);
+        }
+        streamed.extend_from_slice(&enc.finalize().unwrap());
+
+        assert_eq!(streamed, oneshot, "streaming encrypt must equal one-shot");
+
+        // And it round-trips through the streaming decryptor.
+        let mut dec = backend.aes_gcm_decrypt_stream(&key, &iv, &[]).unwrap();
+        let mut out = vec![0u8; streamed.len()];
+        let mut produced = 0;
+        for chunk in streamed.chunks(777) {
+            produced += dec.update(chunk, &mut out[produced..]).unwrap();
+        }
+        produced += dec.finalize(&mut out[produced..]).unwrap();
+        out.truncate(produced);
+        assert_eq!(out, plaintext, "decrypt must recover the plaintext");
+    }
+
+    #[test]
+    fn aes_gcm_stream_encrypt_empty() {
+        let backend = RustCryptoBackend::new();
+        let key = [0x07u8; 16];
+        let iv = [0x09u8; 12];
+
+        let oneshot = backend.aes_gcm_encrypt(&key, &iv, &[], &[]).unwrap();
+        let mut enc = backend.aes_gcm_encrypt_stream(&key, &iv, &[]).unwrap();
+        let tag = enc.finalize().unwrap();
+        assert_eq!(tag.to_vec(), oneshot, "empty message is just the tag");
     }
 
     #[test]

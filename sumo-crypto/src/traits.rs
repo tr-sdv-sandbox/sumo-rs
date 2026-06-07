@@ -4,7 +4,7 @@ use std::boxed::Box;
 use std::vec::Vec;
 
 use crate::error::CryptoError;
-use crate::streaming::{StreamingAeadDecryptor, StreamingHash};
+use crate::streaming::{StreamingAeadDecryptor, StreamingAeadEncryptor, StreamingHash};
 
 /// Abstract cryptographic backend.
 ///
@@ -59,6 +59,16 @@ pub trait CryptoBackend {
         aad: &[u8],
         plaintext: &[u8],
     ) -> Result<Vec<u8>, CryptoError>;
+
+    /// Streaming counterpart to [`aes_gcm_encrypt`](Self::aes_gcm_encrypt), for
+    /// encrypting payloads too large to hold in memory. Mirrors
+    /// [`aes_gcm_decrypt_stream`](Self::aes_gcm_decrypt_stream). AAD = empty only.
+    fn aes_gcm_encrypt_stream(
+        &self,
+        key: &[u8; 16],
+        iv: &[u8; 12],
+        aad: &[u8],
+    ) -> Result<Box<dyn StreamingAeadEncryptor>, CryptoError>;
 
     fn random_bytes(&self, buf: &mut [u8]) -> Result<(), CryptoError>;
 }
