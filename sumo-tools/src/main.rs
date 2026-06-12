@@ -16,6 +16,23 @@ use sumo_offboard::image_builder::ImageManifestBuilder;
 use sumo_offboard::keygen;
 use sumo_offboard::recipient::Recipient;
 
+/// Write secret bytes (private key / CEK material) to `path` with owner-only
+/// (0600) permissions so they aren't world-readable on the operator's machine.
+/// Drop-in for `fs::write`; best-effort chmod on unix, no-op elsewhere.
+fn write_secret<P: AsRef<std::path::Path>, C: AsRef<[u8]>>(
+    path: P,
+    data: C,
+) -> std::io::Result<()> {
+    let path = path.as_ref();
+    fs::write(path, data)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(())
+}
+
 #[derive(Parser)]
 #[command(name = "sumo-tool", about = "SUIT manifest and key management tool")]
 struct Cli {
@@ -364,7 +381,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
 
             let private_bytes = keygen::serialize_key(&key, true)?;
-            fs::write(&output, &private_bytes)?;
+            write_secret(&output, &private_bytes)?;
             eprintln!("Wrote private key to {}", output.display());
 
             if let Some(pub_path) = public {
@@ -538,7 +555,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     if let Some(ref cek_bytes) = cek {
                         let cek_path = PathBuf::from(format!("{}.cek", po.display()));
-                        fs::write(&cek_path, cek_bytes)?;
+                        write_secret(&cek_path, cek_bytes)?;
                         eprintln!("Wrote CEK to {} (SENSITIVE)", cek_path.display());
                     }
                 }
@@ -1138,7 +1155,7 @@ fn build_from_manifest(
             }
             if let Some(ref cek_bytes) = cek {
                 let cek_path = PathBuf::from(format!("{}.cek", po.display()));
-                fs::write(&cek_path, cek_bytes)?;
+                write_secret(&cek_path, cek_bytes)?;
                 eprintln!("Wrote CEK to {} (SENSITIVE)", cek_path.display());
             }
         }
@@ -1232,7 +1249,7 @@ fn build_multi_component_manifest(
                     }
                     if let Some(ref cek_bytes) = cek {
                         let cek_path = std::path::PathBuf::from(format!("{}.cek", po.display()));
-                        fs::write(&cek_path, cek_bytes)?;
+                        write_secret(&cek_path, cek_bytes)?;
                         eprintln!("Wrote CEK to {} (SENSITIVE)", cek_path.display());
                     }
                 }
