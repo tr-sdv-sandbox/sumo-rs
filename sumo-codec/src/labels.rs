@@ -36,6 +36,15 @@ pub const SUIT_PARAMETER_DEVICE_IDENTIFIER: i64 = 24;
 // Custom parameters (private use range, negative integers)
 pub const SUIT_PARAMETER_SECURITY_VERSION: i64 = -257;
 
+// COSE_Sign1 protected-header labels carried on the SUIT authentication wrapper.
+// The manifest signing time rides here as a CWT Claims Set (RFC 9597: COSE
+// header label 15 = "CWT Claims") holding the registered `iat` claim (RFC 8392
+// claim 6 = issued-at, NumericDate = seconds since the Unix epoch). It is inside
+// the protected header, so the COSE signature covers it: an unforgeable, signed
+// lower bound on real time. See docs/design/safe-time-floor.md (source #2).
+pub const COSE_HEADER_CWT_CLAIMS: i64 = 15;
+pub const CWT_CLAIM_IAT: i64 = 6;
+
 // SUIT directives
 pub const SUIT_DIRECTIVE_SET_COMPONENT_INDEX: i64 = 12;
 pub const SUIT_DIRECTIVE_SET_PARAMETERS: i64 = 19;

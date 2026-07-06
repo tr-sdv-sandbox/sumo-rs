@@ -29,6 +29,51 @@ impl Manifest {
         self.dependency_count() > 0
     }
 
+    /// The manifest signing time (`iat`, Unix seconds) carried in the COSE_Sign1
+    /// protected header as an RFC-9597 CWT Claims Set: `{15: {6: iat}}`. `None`
+    /// if absent or unparseable.
+    ///
+    /// This value is inside the *protected* header, so it is covered by the
+    /// signature the validator already checked — read it only from a VERIFIED
+    /// manifest (as returned by [`crate::validator`]). It is a signed lower bound
+    /// on real time, the input the safe-time floor ratchets from
+    /// (docs/design/safe-time-floor.md).
+    pub fn signing_time(&self) -> Option<u64> {
+        use coset::{CborSerializable, TaggedCborSerializable};
+
+        let sig = self.envelope.authentication.signatures.first()?;
+        let sign1 = coset::CoseSign1::from_tagged_slice(sig)
+            .or_else(|_| coset::CoseSign1::from_slice(sig))
+            .ok()?;
+        // Find COSE header label 15 (CWT Claims) in the protected header rest.
+        let claims = sign1
+            .protected
+            .header
+            .rest
+            .iter()
+            .find_map(|(label, value)| match (label, value) {
+                (coset::Label::Int(l), coset::cbor::value::Value::Map(m))
+                    if *l == COSE_HEADER_CWT_CLAIMS =>
+                {
+                    Some(m)
+                }
+                _ => None,
+            })?;
+        // Pull claim 6 (iat) from the CWT Claims Set.
+        for (k, v) in claims {
+            if let (
+                coset::cbor::value::Value::Integer(ki),
+                coset::cbor::value::Value::Integer(iat),
+            ) = (k, v)
+            {
+                if i128::from(*ki) == CWT_CLAIM_IAT as i128 {
+                    return u64::try_from(i128::from(*iat)).ok();
+                }
+            }
+        }
+        None
+    }
+
     /// Get the CBOR-encoded component identifier for the given index.
     pub fn component_id(&self, index: usize) -> Option<&[Vec<u8>]> {
         self.envelope

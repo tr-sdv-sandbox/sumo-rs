@@ -358,6 +358,16 @@ fn parse_uuid(hex_str: &str) -> Result<Uuid, String> {
     Ok(Uuid(arr))
 }
 
+/// Wall-clock now as Unix seconds — the manifest signing time (`iat`). Sampled
+/// here, at the tool's edge, and passed into the builders (which never read the
+/// clock themselves, so their output stays reproducible for a fixed input).
+fn now_unix_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
@@ -491,6 +501,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
 
             let mut builder = ImageManifestBuilder::new()
+                .signing_time(now_unix_secs())
                 .component_id(comp_id)
                 .sequence_number(seq)
                 .payload_digest(&digest, fw_size);
@@ -733,7 +744,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let key_bytes = fs::read(&signing_key)?;
             let key = CoseKey::from_cose_key_bytes(&key_bytes)?;
 
-            let mut builder = CampaignBuilder::new().sequence_number(seq);
+            let mut builder = CampaignBuilder::new()
+                .signing_time(now_unix_secs())
+                .sequence_number(seq);
 
             if let Some(v) = vendor {
                 builder = builder.vendor_id(parse_uuid(&v)?);
@@ -1041,6 +1054,7 @@ fn build_from_manifest(
         None => {
             // CRL / policy-only manifest — no payload
             let mut builder = ImageManifestBuilder::new()
+                .signing_time(now_unix_secs())
                 .component_id(comp_id)
                 .sequence_number(desc.sequence_number);
 
@@ -1101,6 +1115,7 @@ fn build_from_manifest(
 
     // Build the manifest
     let mut builder = ImageManifestBuilder::new()
+        .signing_time(now_unix_secs())
         .component_id(comp_id)
         .sequence_number(desc.sequence_number)
         .payload_digest(&digest, fw_size);
@@ -1174,7 +1189,9 @@ fn build_multi_component_manifest(
     let key = CoseKey::from_cose_key_bytes(&key_bytes)?;
 
     let components = desc.components.unwrap();
-    let mut builder = MultiComponentBuilder::new().sequence_number(desc.sequence_number);
+    let mut builder = MultiComponentBuilder::new()
+        .signing_time(now_unix_secs())
+        .sequence_number(desc.sequence_number);
 
     if let Some(sv) = desc.security_version {
         builder = builder.security_version(sv);

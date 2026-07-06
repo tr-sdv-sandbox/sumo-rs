@@ -29,6 +29,11 @@ pub struct ImageManifestBuilder {
     encryption_info: Option<Vec<u8>>,
     integrated_payloads: std::collections::BTreeMap<String, Vec<u8>>,
     security_version: Option<u64>,
+    /// Manifest signing time — `iat` (Unix seconds), stamped into the COSE_Sign1
+    /// protected header (`{15: {6: iat}}`). REQUIRED: `build` errors if unset, so
+    /// no manifest is ever produced without a signed lower bound on real time.
+    /// Caller-supplied (never sampled here) so builds/test-vectors are reproducible.
+    signing_time: Option<u64>,
     text_vendor_name: Option<String>,
     text_model_name: Option<String>,
     text_model_info: Option<String>,
@@ -52,12 +57,20 @@ impl ImageManifestBuilder {
             encryption_info: None,
             integrated_payloads: std::collections::BTreeMap::new(),
             security_version: None,
+            signing_time: None,
             text_vendor_name: None,
             text_model_name: None,
             text_model_info: None,
             text_version: None,
             text_description: None,
         }
+    }
+
+    /// Set the manifest signing time (`iat`, Unix seconds). REQUIRED — see the
+    /// `signing_time` field. Sample the clock at the caller's edge and pass it in.
+    pub fn signing_time(mut self, unix_secs: u64) -> Self {
+        self.signing_time = Some(unix_secs);
+        self
     }
 
     pub fn component_id(mut self, id: Vec<String>) -> Self {
@@ -133,6 +146,12 @@ impl ImageManifestBuilder {
     /// Build and sign the SUIT envelope.
     pub fn build(self, signing_key: &CoseKey) -> Result<Vec<u8>, OffboardError> {
         let crypto = sumo_crypto::RustCryptoBackend::new();
+
+        // Signing time (iat) is mandatory — every manifest must carry a signed
+        // lower bound on real time. Fail loudly rather than emit one without it.
+        let iat = self.signing_time.ok_or_else(|| {
+            OffboardError::Other("signing_time (iat) is required to build a manifest".into())
+        })?;
 
         // Build component identifier
         let comp = ComponentIdentifier {
@@ -308,7 +327,7 @@ impl ImageManifestBuilder {
 
         // Encode and sign
         let signed_bytes = encode_envelope(&envelope, |manifest_bytes| {
-            sign_manifest(&crypto, signing_key, manifest_bytes)
+            sign_manifest(&crypto, signing_key, manifest_bytes, iat)
         })?;
 
         Ok(signed_bytes)
@@ -343,6 +362,9 @@ pub struct MultiComponentBuilder {
     components: Vec<ComponentSpec>,
     sequence_number: u64,
     security_version: Option<u64>,
+    /// Manifest signing time — `iat` (Unix seconds). REQUIRED (see
+    /// `ImageManifestBuilder::signing_time`); `build` errors if unset.
+    signing_time: Option<u64>,
     integrated_payloads: std::collections::BTreeMap<String, Vec<u8>>,
     text_version: Option<String>,
     text_model_name: Option<String>,
@@ -355,6 +377,7 @@ impl MultiComponentBuilder {
             components: Vec::new(),
             sequence_number: 0,
             security_version: None,
+            signing_time: None,
             integrated_payloads: std::collections::BTreeMap::new(),
             text_version: None,
             text_model_name: None,
@@ -364,6 +387,11 @@ impl MultiComponentBuilder {
 
     pub fn sequence_number(mut self, seq: u64) -> Self {
         self.sequence_number = seq;
+        self
+    }
+    /// Set the manifest signing time (`iat`, Unix seconds). REQUIRED.
+    pub fn signing_time(mut self, unix_secs: u64) -> Self {
+        self.signing_time = Some(unix_secs);
         self
     }
     pub fn security_version(mut self, v: u64) -> Self {
@@ -398,6 +426,11 @@ impl MultiComponentBuilder {
     /// Build and sign the multi-component SUIT envelope.
     pub fn build(self, signing_key: &CoseKey) -> Result<Vec<u8>, OffboardError> {
         let crypto = sumo_crypto::RustCryptoBackend::new();
+
+        // Signing time (iat) is mandatory (see ImageManifestBuilder::signing_time).
+        let iat = self.signing_time.ok_or_else(|| {
+            OffboardError::Other("signing_time (iat) is required to build a manifest".into())
+        })?;
 
         if self.components.is_empty() {
             return Err(OffboardError::Other("no components added".into()));
@@ -546,7 +579,7 @@ impl MultiComponentBuilder {
         };
 
         let signed_bytes = encode_envelope(&envelope, |manifest_bytes| {
-            sign_manifest(&crypto, signing_key, manifest_bytes)
+            sign_manifest(&crypto, signing_key, manifest_bytes, iat)
         })?;
 
         Ok(signed_bytes)
@@ -564,6 +597,7 @@ pub(crate) fn sign_manifest(
     crypto: &dyn CryptoBackend,
     key: &CoseKey,
     manifest_bytes: &[u8],
+    iat: u64,
 ) -> Result<Vec<u8>, sumo_codec::CodecError> {
     // Compute digest over the bstr-wrapped manifest, matching the
     // RFC 9019 convention used by libcsuit ("include header"). The bstr
@@ -589,7 +623,7 @@ pub(crate) fn sign_manifest(
         })
         .unwrap_or(-7);
 
-    let protected = encode_protected_header(alg)?;
+    let protected = encode_protected_header(alg, iat)?;
 
     // Sign
     let signature = crypto
@@ -663,12 +697,27 @@ fn encode_digest_cbor(digest: &DigestInfo) -> Result<Vec<u8>, sumo_codec::CodecE
     Ok(buf)
 }
 
-fn encode_protected_header(alg: i64) -> Result<Vec<u8>, sumo_codec::CodecError> {
+/// Encode the COSE_Sign1 protected header: `{1: alg, 15: {6: iat}}`.
+/// Label 1 is the COSE algorithm; label 15 (RFC 9597 "CWT Claims") carries a
+/// CWT Claims Set holding the registered `iat` claim (6) — the manifest signing
+/// time in Unix seconds. Because it is in the *protected* header the signature
+/// covers it, so `iat` is a signed, unforgeable lower bound on real time.
+fn encode_protected_header(alg: i64, iat: u64) -> Result<Vec<u8>, sumo_codec::CodecError> {
     use ciborium::value::{Integer, Value};
-    let map = Value::Map(vec![(
-        Value::Integer(Integer::from(1i64)),
-        Value::Integer(Integer::from(alg)),
+    let cwt_claims = Value::Map(vec![(
+        Value::Integer(Integer::from(sumo_codec::labels::CWT_CLAIM_IAT)),
+        Value::Integer(Integer::from(iat)),
     )]);
+    let map = Value::Map(vec![
+        (
+            Value::Integer(Integer::from(1i64)),
+            Value::Integer(Integer::from(alg)),
+        ),
+        (
+            Value::Integer(Integer::from(sumo_codec::labels::COSE_HEADER_CWT_CLAIMS)),
+            cwt_claims,
+        ),
+    ]);
     let mut buf = Vec::new();
     ciborium::ser::into_writer(&map, &mut buf).map_err(|_| sumo_codec::CodecError::CborEncode)?;
     Ok(buf)

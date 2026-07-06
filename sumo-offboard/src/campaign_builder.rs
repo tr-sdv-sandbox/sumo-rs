@@ -28,6 +28,9 @@ pub struct CampaignBuilder {
     sequence_number: u64,
     vendor_id: Option<Uuid>,
     class_id: Option<Uuid>,
+    /// Manifest signing time — `iat` (Unix seconds). REQUIRED (see
+    /// `ImageManifestBuilder::signing_time`); `build` errors if unset.
+    signing_time: Option<u64>,
     deps: Vec<CampaignDep>,
 }
 
@@ -37,12 +40,18 @@ impl CampaignBuilder {
             sequence_number: 0,
             vendor_id: None,
             class_id: None,
+            signing_time: None,
             deps: Vec::new(),
         }
     }
 
     pub fn sequence_number(mut self, seq: u64) -> Self {
         self.sequence_number = seq;
+        self
+    }
+    /// Set the campaign manifest signing time (`iat`, Unix seconds). REQUIRED.
+    pub fn signing_time(mut self, unix_secs: u64) -> Self {
+        self.signing_time = Some(unix_secs);
         self
     }
     pub fn vendor_id(mut self, v: Uuid) -> Self {
@@ -77,6 +86,11 @@ impl CampaignBuilder {
     /// Build and sign the campaign SUIT envelope.
     pub fn build(self, signing_key: &CoseKey) -> Result<Vec<u8>, OffboardError> {
         let crypto = sumo_crypto::RustCryptoBackend::new();
+
+        // Signing time (iat) is mandatory (see ImageManifestBuilder::signing_time).
+        let iat = self.signing_time.ok_or_else(|| {
+            OffboardError::Other("signing_time (iat) is required to build a manifest".into())
+        })?;
 
         if self.deps.is_empty() {
             return Err(OffboardError::Other(
@@ -246,7 +260,7 @@ impl CampaignBuilder {
         };
 
         let signed_bytes = encode_envelope(&envelope, |manifest_bytes| {
-            sign_manifest(&crypto, signing_key, manifest_bytes)
+            sign_manifest(&crypto, signing_key, manifest_bytes, iat)
         })?;
 
         Ok(signed_bytes)

@@ -28,6 +28,9 @@ const VENDOR_UUID: [u8; 16] = [
 const CLASS_UUID: [u8; 16] = [
     0x14, 0x92, 0xAF, 0x14, 0x25, 0x69, 0x5E, 0x48, 0xBF, 0x42, 0x9B, 0x2D, 0x51, 0xF2, 0xAB, 0x45,
 ];
+/// Fixed manifest signing time (`iat`) for tests — a constant, not `now()`, so
+/// signed outputs are reproducible. 2023-11-14T22:13:20Z.
+const TEST_IAT: u64 = 1_700_000_000;
 
 // --- Test helpers ---
 
@@ -77,6 +80,7 @@ fn build_test_image(
     };
 
     let envelope = ImageManifestBuilder::new()
+        .signing_time(TEST_IAT)
         .component_id(vec!["ecu-a".into(), "firmware".into()])
         .sequence_number(42)
         .vendor_id(test_vendor())
@@ -101,6 +105,7 @@ fn build_test_image_ecdh(
     let digest = encryptor::sha256(firmware);
 
     let envelope = ImageManifestBuilder::new()
+        .signing_time(TEST_IAT)
         .component_id(vec!["ecu-a".into(), "firmware".into()])
         .sequence_number(42)
         .vendor_id(test_vendor())
@@ -405,6 +410,7 @@ fn compress_encrypt_decrypt_decompress() {
     let digest = encryptor::sha256(&firmware);
 
     let envelope_bytes = ImageManifestBuilder::new()
+        .signing_time(TEST_IAT)
         .component_id(vec!["ecu-a".into(), "firmware".into()])
         .sequence_number(42)
         .vendor_id(test_vendor())
@@ -669,6 +675,7 @@ fn build_l2_image(
     let digest = encryptor::sha256(firmware);
 
     let envelope = ImageManifestBuilder::new()
+        .signing_time(TEST_IAT)
         .component_id(comp_id)
         .sequence_number(seq)
         .vendor_id(test_vendor())
@@ -710,6 +717,7 @@ fn process_campaign_two_images() {
 
     // Build campaign
     let campaign = CampaignBuilder::new()
+        .signing_time(TEST_IAT)
         .sequence_number(200)
         .vendor_id(test_vendor())
         .class_id(test_class())
@@ -760,6 +768,7 @@ fn process_campaign_integrated_payloads() {
 
     // Build campaign with integrated L2 manifest
     let campaign = CampaignBuilder::new()
+        .signing_time(TEST_IAT)
         .sequence_number(200)
         .vendor_id(test_vendor())
         .class_id(test_class())
@@ -937,6 +946,7 @@ fn campaign_empty_deps_rejected() {
     let signing_key = keygen::generate_signing_key(keygen::ES256).unwrap();
 
     let result = CampaignBuilder::new()
+        .signing_time(TEST_IAT)
         .sequence_number(1)
         .build(&signing_key);
 
@@ -960,6 +970,7 @@ fn process_campaign_fetch_l2_fails() {
     );
 
     let campaign = CampaignBuilder::new()
+        .signing_time(TEST_IAT)
         .sequence_number(200)
         .vendor_id(test_vendor())
         .add_image("https://manifests.example.com/l2.suit".into(), &l2_env)
@@ -1052,6 +1063,7 @@ fn text_fields_roundtrip() {
     let digest = crypto.sha256(firmware);
 
     let envelope = ImageManifestBuilder::new()
+        .signing_time(TEST_IAT)
         .component_id(vec!["ecu-a".into(), "firmware".into()])
         .sequence_number(10)
         .payload_digest(&digest, firmware.len() as u64)
@@ -1089,6 +1101,7 @@ fn security_version_roundtrip() {
     let digest = crypto.sha256(firmware);
 
     let envelope = ImageManifestBuilder::new()
+        .signing_time(TEST_IAT)
         .component_id(vec!["ecu-a".into()])
         .sequence_number(50)
         .security_version(3)
@@ -1115,6 +1128,7 @@ fn security_version_absent_returns_none() {
     let digest = crypto.sha256(firmware);
 
     let envelope = ImageManifestBuilder::new()
+        .signing_time(TEST_IAT)
         .component_id(vec!["ecu-a".into()])
         .sequence_number(10)
         .payload_digest(&digest, firmware.len() as u64)
@@ -1136,6 +1150,7 @@ fn security_floor_only_manifest() {
     let signing_key = keygen::generate_signing_key(keygen::ES256).unwrap();
 
     let envelope = ImageManifestBuilder::new()
+        .signing_time(TEST_IAT)
         .component_id(vec!["ecu-a".into()])
         .sequence_number(999)
         .security_version(5)
@@ -1150,4 +1165,72 @@ fn security_floor_only_manifest() {
     assert_eq!(manifest.security_version(0), Some(5));
     assert_eq!(manifest.component_count(), 1);
     assert!(manifest.image_digest(0).is_none());
+}
+
+#[test]
+fn signing_time_roundtrips_through_verified_manifest() {
+    // The offboard-stamped iat (COSE protected header {15:{6:iat}}) must be
+    // readable from the VERIFIED onboard manifest, and equal what was set.
+    let crypto = RustCryptoBackend::new();
+    let signing_key = keygen::generate_signing_key(keygen::ES256).unwrap();
+    let digest = encryptor::sha256(b"fw");
+
+    let envelope = ImageManifestBuilder::new()
+        .signing_time(TEST_IAT)
+        .component_id(vec!["ecu-a".into(), "firmware".into()])
+        .sequence_number(1)
+        .vendor_id(test_vendor())
+        .class_id(test_class())
+        .payload_digest(&digest, 2)
+        .payload_uri("https://fw.example.com/ecu-a.bin".into())
+        .build(&signing_key)
+        .unwrap();
+
+    let trust_anchor = signing_key.public_key_bytes();
+    let validator = Validator::new(&trust_anchor, None);
+    let manifest = validator.validate_envelope(&envelope, &crypto, 0).unwrap();
+
+    assert_eq!(
+        manifest.signing_time(),
+        Some(TEST_IAT),
+        "verified manifest must carry the iat set at build time"
+    );
+}
+
+#[test]
+fn build_fails_without_signing_time() {
+    // iat is mandatory: a builder with no signing_time must refuse to build,
+    // so no manifest is ever produced without a signed lower bound on real time.
+    let signing_key = keygen::generate_signing_key(keygen::ES256).unwrap();
+    let digest = encryptor::sha256(b"fw");
+
+    let result = ImageManifestBuilder::new()
+        .component_id(vec!["ecu-a".into(), "firmware".into()])
+        .sequence_number(1)
+        .payload_digest(&digest, 2)
+        .payload_uri("https://fw.example.com/ecu-a.bin".into())
+        .build(&signing_key);
+
+    assert!(
+        result.is_err(),
+        "build must fail when signing_time is unset"
+    );
+
+    // Same for the campaign (L1) builder.
+    let dummy_l2 = ImageManifestBuilder::new()
+        .signing_time(TEST_IAT)
+        .component_id(vec!["ecu-a".into(), "firmware".into()])
+        .sequence_number(1)
+        .payload_digest(&digest, 2)
+        .payload_uri("https://x/a.bin".into())
+        .build(&signing_key)
+        .unwrap();
+    let campaign = CampaignBuilder::new()
+        .sequence_number(1)
+        .add_image("https://x/l2.suit".into(), &dummy_l2)
+        .build(&signing_key);
+    assert!(
+        campaign.is_err(),
+        "campaign build must fail when signing_time is unset"
+    );
 }
