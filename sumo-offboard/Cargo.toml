@@ -21,4 +21,3 @@ getrandom = "0.2"
 
 [dev-dependencies]
 sumo-onboard = { path = "../sumo-onboard" }
-serde_yaml = "0.9"
