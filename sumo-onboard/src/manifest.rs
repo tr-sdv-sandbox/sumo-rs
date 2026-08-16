@@ -360,11 +360,11 @@ fn find_param_in_seq<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
     use sumo_codec::commands::CommandItem;
     use sumo_codec::envelope::SuitAuthentication;
     use sumo_codec::manifest::{SuitCommon, SuitManifest};
     use sumo_codec::types::DigestAlgorithm;
-    use std::collections::BTreeMap;
 
     /// Minimal manifest carrying only the given shared command sequence — all
     /// other envelope fields are inert (`disable_target` reads the shared
