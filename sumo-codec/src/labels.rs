@@ -55,6 +55,9 @@ pub const SUIT_DIRECTIVE_COPY: i64 = 22;
 pub const SUIT_DIRECTIVE_INVOKE: i64 = 23;
 pub const SUIT_DIRECTIVE_PROCESS_DEPENDENCY: i64 = 11;
 pub const SUIT_DIRECTIVE_SWAP: i64 = 31;
+// Custom (non-standard) directive: disable the current component. 30 does not
+// collide with any occupied directive or condition label above.
+pub const SUIT_DIRECTIVE_DISABLE: i64 = 30;
 
 // SUIT conditions
 pub const SUIT_CONDITION_VENDOR_IDENTIFIER: i64 = 1;

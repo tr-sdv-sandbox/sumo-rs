@@ -332,6 +332,84 @@ impl ImageManifestBuilder {
 
         Ok(signed_bytes)
     }
+
+    /// Build and sign a SUIT **disable** manifest for this builder's component.
+    ///
+    /// Mirrors [`build`](Self::build) but emits no firmware payload: the command
+    /// sequence is `[set-component-index 0, suit-directive-disable]` and every
+    /// severable member is empty, so `has_firmware()` is false. Signed with the
+    /// same sw-authority `CoseKey` as a flash manifest, so the device's existing
+    /// trust anchor validates it and routes the directive to deactivation.
+    pub fn build_disable(self, signing_key: &CoseKey) -> Result<Vec<u8>, OffboardError> {
+        let crypto = sumo_crypto::RustCryptoBackend::new();
+
+        // Signing time (iat) is mandatory — see the `signing_time` field.
+        let iat = self.signing_time.ok_or_else(|| {
+            OffboardError::Other("signing_time (iat) is required to build a manifest".into())
+        })?;
+
+        // Build component identifier
+        let comp = ComponentIdentifier {
+            segments: self
+                .component_id
+                .iter()
+                .map(|s| s.as_bytes().to_vec())
+                .collect(),
+        };
+
+        // Shared command sequence: select the component, then disable it. No
+        // payload, so no override-parameters and no validate/install/invoke.
+        let shared_items = vec![
+            CommandItem {
+                label: SUIT_DIRECTIVE_SET_COMPONENT_INDEX,
+                value: CommandValue::ComponentIndex(0),
+            },
+            CommandItem {
+                label: SUIT_DIRECTIVE_DISABLE,
+                value: CommandValue::Disable,
+            },
+        ];
+
+        let manifest = SuitManifest {
+            manifest_version: 1,
+            sequence_number: self.sequence_number,
+            common: SuitCommon {
+                components: vec![comp],
+                dependencies: Vec::new(),
+                shared_sequence: CommandSequence {
+                    items: shared_items,
+                },
+            },
+            validate: None,
+            invoke: None,
+            severable: SeverableMembers::default(),
+        };
+
+        // Encode manifest to compute digest
+        let manifest_bytes = sumo_codec::encode::encode_manifest(&manifest)?;
+        // Hash bstr-wrapped manifest (RFC 9019 / libcsuit "include header")
+        let digest_hash = crypto.sha256(&cbor_bstr_wrap(&manifest_bytes));
+
+        let envelope = SuitEnvelope {
+            authentication: SuitAuthentication {
+                digest: DigestInfo {
+                    algorithm: DigestAlgorithm::Sha256,
+                    bytes: digest_hash.to_vec(),
+                },
+                signatures: Vec::new(), // populated by encode_envelope
+            },
+            manifest,
+            integrated_payloads: self.integrated_payloads,
+            manifest_bytes: Vec::new(), // populated by encode_envelope
+        };
+
+        // Encode and sign
+        let signed_bytes = encode_envelope(&envelope, |manifest_bytes| {
+            sign_manifest(&crypto, signing_key, manifest_bytes, iat)
+        })?;
+
+        Ok(signed_bytes)
+    }
 }
 
 impl Default for ImageManifestBuilder {
@@ -721,4 +799,60 @@ fn encode_protected_header(alg: i64, iat: u64) -> Result<Vec<u8>, sumo_codec::Co
     let mut buf = Vec::new();
     ciborium::ser::into_writer(&map, &mut buf).map_err(|_| sumo_codec::CodecError::CborEncode)?;
     Ok(buf)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sumo_codec::decode::decode_envelope;
+
+    /// Mint a disable manifest for a component and round-trip it through the real
+    /// encode/decode: it must be (a) signed, (b) decode with a `CommandValue::Disable`
+    /// for the selected component, and (c) carry no firmware payload.
+    #[test]
+    fn build_disable_mints_a_signed_no_payload_manifest() {
+        let key = crate::keygen::generate_signing_key(crate::keygen::ES256).unwrap();
+
+        let bytes = ImageManifestBuilder::new()
+            .component_id(vec!["vm1".into()])
+            .sequence_number(7)
+            .signing_time(1_700_000_000)
+            .build_disable(&key)
+            .expect("disable manifest builds");
+
+        let env = decode_envelope(&bytes).expect("disable manifest decodes");
+
+        // (a) signed — the auth wrapper carries a COSE_Sign1.
+        assert!(
+            !env.authentication.signatures.is_empty(),
+            "disable manifest must be signed"
+        );
+
+        // (b) the shared sequence selects the component, then disables it.
+        let items = &env.manifest.common.shared_sequence.items;
+        let sci = items
+            .iter()
+            .find(|c| c.label == SUIT_DIRECTIVE_SET_COMPONENT_INDEX)
+            .expect("set-component-index present");
+        assert!(matches!(sci.value, CommandValue::ComponentIndex(0)));
+        let disable = items
+            .iter()
+            .find(|c| c.label == SUIT_DIRECTIVE_DISABLE)
+            .expect("disable directive present after round-trip");
+        assert!(matches!(disable.value, CommandValue::Disable));
+
+        // (c) no firmware payload: no override-parameters (=> no image digest),
+        // and no severable install/payload_fetch nor validate/invoke sequences.
+        assert!(
+            !items
+                .iter()
+                .any(|c| c.label == SUIT_DIRECTIVE_OVERRIDE_PARAMETERS),
+            "disable manifest carries no parameters"
+        );
+        assert!(env.manifest.severable.install.is_none());
+        assert!(env.manifest.severable.payload_fetch.is_none());
+        assert!(env.manifest.validate.is_none());
+        assert!(env.manifest.invoke.is_none());
+        assert!(env.integrated_payloads.is_empty());
+    }
 }

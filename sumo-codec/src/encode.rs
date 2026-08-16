@@ -190,6 +190,11 @@ fn encode_command_item(item: &CommandItem, out: &mut Vec<Value>) -> Result<(), C
         CommandValue::ReportingPolicy(rp) => {
             out.push(Value::Integer(Integer::from(*rp as i64)));
         }
+        CommandValue::Disable => {
+            // No payload; emit reporting-policy 0 so the (label, argument)
+            // command pair stays well-formed, like invoke/swap.
+            out.push(Value::Integer(Integer::from(0i64)));
+        }
     }
 
     Ok(())

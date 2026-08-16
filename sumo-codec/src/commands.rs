@@ -26,4 +26,6 @@ pub enum CommandValue {
     ComponentIndex(usize),
     /// Reporting policy (uint) for conditions and directives.
     ReportingPolicy(u64),
+    /// Marker for suit-directive-disable: disable the current component. No payload.
+    Disable,
 }

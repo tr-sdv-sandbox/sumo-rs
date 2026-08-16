@@ -266,6 +266,30 @@ impl Manifest {
         self.image_digest(0).is_some()
     }
 
+    /// The component index this manifest administratively *disables*, if any.
+    ///
+    /// A disable manifest carries a [`CommandValue::Disable`] directive in the
+    /// shared command sequence and no firmware payload. Returns the index
+    /// selected by the preceding `set-component-index` (0 if none precedes the
+    /// directive), or `None` when the manifest carries no disable directive
+    /// (ordinary firmware or a CRL/policy manifest). Mirrors the
+    /// component-index tracking in [`find_param_in_seq`].
+    pub fn disable_target(&self) -> Option<usize> {
+        let mut current_index: usize = 0;
+        for item in &self.envelope.manifest.common.shared_sequence.items {
+            match (&item.value, item.label) {
+                (CommandValue::ComponentIndex(idx), SUIT_DIRECTIVE_SET_COMPONENT_INDEX) => {
+                    current_index = *idx;
+                }
+                (CommandValue::Disable, SUIT_DIRECTIVE_DISABLE) => {
+                    return Some(current_index);
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+
     /// Raw envelope reference (for decryptor/orchestrator access).
     pub fn envelope(&self) -> &SuitEnvelope {
         &self.envelope
@@ -331,4 +355,75 @@ fn find_param_in_seq<'a>(
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sumo_codec::commands::CommandItem;
+    use sumo_codec::envelope::SuitAuthentication;
+    use sumo_codec::manifest::{SuitCommon, SuitManifest};
+    use sumo_codec::types::DigestAlgorithm;
+    use std::collections::BTreeMap;
+
+    /// Minimal manifest carrying only the given shared command sequence — all
+    /// other envelope fields are inert (`disable_target` reads the shared
+    /// sequence exclusively).
+    fn manifest_with_shared_seq(items: Vec<CommandItem>) -> Manifest {
+        Manifest {
+            envelope: SuitEnvelope {
+                authentication: SuitAuthentication {
+                    digest: DigestInfo {
+                        algorithm: DigestAlgorithm::Sha256,
+                        bytes: Vec::new(),
+                    },
+                    signatures: Vec::new(),
+                },
+                manifest: SuitManifest {
+                    common: SuitCommon {
+                        shared_sequence: CommandSequence { items },
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                integrated_payloads: BTreeMap::new(),
+                manifest_bytes: Vec::new(),
+            },
+        }
+    }
+
+    #[test]
+    fn disable_target_reads_selected_component_index() {
+        let m = manifest_with_shared_seq(vec![
+            CommandItem {
+                label: SUIT_DIRECTIVE_SET_COMPONENT_INDEX,
+                value: CommandValue::ComponentIndex(2),
+            },
+            CommandItem {
+                label: SUIT_DIRECTIVE_DISABLE,
+                value: CommandValue::Disable,
+            },
+        ]);
+        assert_eq!(m.disable_target(), Some(2));
+        // A disable manifest carries no firmware payload.
+        assert!(!m.has_firmware());
+    }
+
+    #[test]
+    fn disable_target_defaults_to_component_zero() {
+        let m = manifest_with_shared_seq(vec![CommandItem {
+            label: SUIT_DIRECTIVE_DISABLE,
+            value: CommandValue::Disable,
+        }]);
+        assert_eq!(m.disable_target(), Some(0));
+    }
+
+    #[test]
+    fn disable_target_none_without_disable_directive() {
+        let m = manifest_with_shared_seq(vec![CommandItem {
+            label: SUIT_DIRECTIVE_SET_COMPONENT_INDEX,
+            value: CommandValue::ComponentIndex(1),
+        }]);
+        assert_eq!(m.disable_target(), None);
+    }
 }

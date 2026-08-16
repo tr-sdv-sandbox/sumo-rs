@@ -237,6 +237,7 @@ fn decode_command_item(label: i64, value: &Value) -> Result<CommandItem, CodecEr
             let params = decode_parameters(param_map)?;
             CommandValue::Parameters(params)
         }
+        SUIT_DIRECTIVE_DISABLE => CommandValue::Disable,
         _ => {
             // Conditions and other directives take a uint reporting policy
             let rp = as_uint(value).unwrap_or(0);
@@ -657,5 +658,64 @@ mod tests {
             env2.manifest.common.shared_sequence.items.len(),
             env.manifest.common.shared_sequence.items.len()
         );
+    }
+
+    #[test]
+    fn disable_directive_roundtrips() {
+        // A real firmware-install envelope; we reuse its auth/components/signature
+        // scaffolding and rewrite the command sequences below.
+        let hex = "a2025873825824822f58206ac0c1dfa2c11bc314999ecb38ea5c0553a6b5a45f5d2f8a6b4f8f3f07269d85584ad28443a10126a0f65840b1905327fff58efe11016c9dd79f5f9c7b90199cb7cc2c89d52fc24062f13e0ed5ab9b1a899637be38be2ffc84adbe2e411d45f3cb61b90842ce3375cb0e18ee035896a5010102182a035862a2028182426677436170700458548614a40150aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0250bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb035824822f582094d3b065150f3e618b865ebf56148ff163b04c7f674e29d4130390e26cf18fd00e14010f020f074382030f1458238613a1157819687474703a2f2f6578616d706c652e636f6d2f66772e62696e150f030f";
+        let data = hex::decode(hex).unwrap();
+        let mut env = decode_envelope(&data).unwrap();
+        let sig = env.authentication.signatures[0].clone();
+
+        // A manifest carrying suit-directive-disable: select the current
+        // component, then disable it. No firmware payload.
+        env.manifest.common.shared_sequence = CommandSequence {
+            items: vec![
+                CommandItem {
+                    label: SUIT_DIRECTIVE_SET_COMPONENT_INDEX,
+                    value: CommandValue::ComponentIndex(0),
+                },
+                CommandItem {
+                    label: SUIT_DIRECTIVE_DISABLE,
+                    value: CommandValue::Disable,
+                },
+            ],
+        };
+        env.manifest.severable = SeverableMembers::default();
+
+        let encoded =
+            crate::encode::encode_envelope(&env, |_manifest_bytes| Ok(sig.clone())).unwrap();
+        let decoded = decode_envelope(&encoded).unwrap();
+
+        let disable = decoded
+            .manifest
+            .common
+            .shared_sequence
+            .items
+            .iter()
+            .find(|c| c.label == SUIT_DIRECTIVE_DISABLE)
+            .expect("disable directive present after round-trip");
+        // Decoded as its own directive — not folded into the ReportingPolicy catch-all.
+        assert!(matches!(disable.value, CommandValue::Disable));
+        assert!(!matches!(disable.value, CommandValue::ReportingPolicy(_)));
+
+        // A plain no-payload (CRL/policy) manifest with a non-disable directive
+        // must still decode via the catch-all as ReportingPolicy — as before —
+        // and never as Disable.
+        env.manifest.common.shared_sequence = CommandSequence {
+            items: vec![CommandItem {
+                label: SUIT_DIRECTIVE_SWAP,
+                value: CommandValue::ReportingPolicy(15),
+            }],
+        };
+        let encoded =
+            crate::encode::encode_envelope(&env, |_manifest_bytes| Ok(sig.clone())).unwrap();
+        let decoded = decode_envelope(&encoded).unwrap();
+        let cmd = &decoded.manifest.common.shared_sequence.items[0];
+        assert_eq!(cmd.label, SUIT_DIRECTIVE_SWAP);
+        assert!(matches!(cmd.value, CommandValue::ReportingPolicy(15)));
+        assert!(!matches!(cmd.value, CommandValue::Disable));
     }
 }
